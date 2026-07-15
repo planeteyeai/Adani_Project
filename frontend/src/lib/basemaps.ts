@@ -90,7 +90,7 @@ export type AnalysisOverlay = {
 export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
   // Alignment & markers
   { id: "alignment", name: "Project Alignment", description: "Plan & profile centreline and lanes", group: "Alignment & Markers", color: "#c026d3" },
-  { id: "markers", name: "Chainage Points", description: "KMZ chainage markers along alignment", group: "Alignment & Markers", color: "#3b82f6" },
+  { id: "markers", name: "Chainage Points", description: "Thin station ticks with chainage ID labels", group: "Alignment & Markers", color: "#3b82f6" },
   { id: "toll_plazas", name: "Toll Plaza Locations", description: "Toll plaza markers from KMZ", group: "Alignment & Markers", color: "#f59e0b" },
   { id: "road_categories", name: "Road Categories", description: "Lane configuration (2/6/8-lane)", group: "Alignment & Markers", color: "#22c55e" },
   {
@@ -99,6 +99,13 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
     description: "OSM roads within 1000 m of the corridor",
     group: "Alignment & Markers",
     color: "#f59e0b",
+  },
+  {
+    id: "adjacent_roads",
+    name: "Adjacent Roads",
+    description: "Adjacent road access points along the corridor",
+    group: "Alignment & Markers",
+    color: "#0284c7",
   },
   {
     id: "railway_lines",
@@ -149,12 +156,12 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
   { id: "structures", name: "Structures (points)", description: "Underpasses, interchanges, culverts, elevated", group: "Schedule-B Structures", color: "#f59e0b" },
 
   // Schedule-B linear corridor features (drawn along the alignment)
-  { id: "sb_elevated", name: "Elevated Viaduct", description: "Elevated / structure stretches", group: "Schedule-B Corridor", color: "#12c9b0" },
+  { id: "sb_elevated", name: "Elevated Viaduct", description: "Elevated / structure stretches (scour screening)", group: "Schedule-B Corridor", color: "#4de8ff" }, // keep in sync with ELEVATED_VIADUCT_COLOR
   { id: "sb_service_roads", name: "Service Roads", description: "Service / slip / connecting roads", group: "Schedule-B Corridor", color: "#3b82f6" },
   { id: "sb_re_walls", name: "RE Walls", description: "Reinforced-earth retaining walls", group: "Schedule-B Corridor", color: "#f97316" },
   { id: "sb_drains", name: "Drains", description: "Longitudinal drainage stretches", group: "Schedule-B Corridor", color: "#06b6d4" },
   { id: "sb_ramps", name: "Interchange Ramps", description: "Interchange ramp alignments", group: "Schedule-B Corridor", color: "#eab308" },
-  { id: "sb_paved_shoulders", name: "Paved Shoulders", description: "Paved shoulder stretches", group: "Schedule-B Corridor", color: "#94a3b8" },
+  { id: "sb_paved_shoulders", name: "Paved Shoulders", description: "Paved & earthen shoulder stretches", group: "Schedule-B Corridor", color: "#94a3b8" },
 
   // Geotechnical
   { id: "boreholes", name: "Soil Analysis", description: "Geotechnical borehole & soil-test locations", group: "Geotechnical", color: "#a855f7" },
@@ -162,8 +169,8 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
   // Environment
   {
     id: "water_bodies",
-    name: "Water Bodies",
-    description: "Ponds, lakes and water polygons along the corridor",
+    name: "Waterways",
+    description: "Waterways and water bodies along the corridor",
     group: "Environment",
     color: "#0ea5e9",
   },
@@ -177,7 +184,7 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
   {
     id: "trees",
     name: "Trees",
-    description: "Tree inventory along the project corridor",
+    description: "Tree inventory within 50 m of the corridor",
     group: "Environment",
     color: "#22c55e",
   },
@@ -198,6 +205,13 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
 
   // Social impact
   {
+    id: "villages",
+    name: "Villages",
+    description: "Village boundaries along the Digha–Koilwar corridor",
+    group: "Social Impact",
+    color: "#ca8a04",
+  },
+  {
     id: "affected_houses",
     name: "Structures within Acquisition Boundary",
     description: "Building footprints inside the land acquisition boundary",
@@ -209,7 +223,7 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
   {
     id: "flood",
     name: "Flood water time series",
-    description: "Satellite water & inundation extent over time",
+    description: "Satellite water & inundation extent over time (2015–2026)",
     group: "Analysis",
     color: "#0ea5e9",
   },

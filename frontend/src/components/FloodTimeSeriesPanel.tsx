@@ -34,35 +34,64 @@ export default function FloodTimeSeriesPanel({
   onDateChange,
   onClose,
 }: Props) {
+  const years = useMemo(() => {
+    const ys = new Set(data.dates.map((d) => d.slice(0, 4)));
+    return [...ys].sort();
+  }, [data.dates]);
+
+  const [year, setYear] = useState(() => selectedDate.slice(0, 4));
   const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    const y = selectedDate.slice(0, 4);
+    if (years.includes(y)) setYear(y);
+  }, [selectedDate, years]);
+
+  const yearDates = useMemo(
+    () => data.dates.filter((d) => d.startsWith(year)),
+    [data.dates, year],
+  );
+
   const idx = Math.max(0, data.dates.indexOf(selectedDate));
   const step: FloodTimeStep | undefined = data.timeseries[idx];
+  const yearIdx = Math.max(0, yearDates.indexOf(selectedDate));
 
   const chartData = useMemo<ChartRow[]>(
     () =>
-      data.timeseries.map((t) => ({
-        date: t.date,
-        label: formatFloodDate(t.date).replace(/ \d{4}$/, ""),
-        water: t.water_area_ha ?? 0,
-        flood: t.flood_area_ha ?? 0,
-      })),
-    [data.timeseries],
+      data.timeseries
+        .filter((t) => t.date.startsWith(year))
+        .map((t) => ({
+          date: t.date,
+          label: formatFloodDate(t.date).replace(/ \d{4}$/, ""),
+          water: t.water_area_ha ?? 0,
+          flood: t.flood_area_ha ?? 0,
+        })),
+    [data.timeseries, year],
   );
 
   useEffect(() => {
-    if (!playing) return;
+    if (!playing || !yearDates.length) return;
     const id = window.setInterval(() => {
-      const i = data.dates.indexOf(selectedDate);
-      const next = data.dates[(i + 1) % data.dates.length];
+      const i = yearDates.indexOf(selectedDate);
+      const next = yearDates[(Math.max(0, i) + 1) % yearDates.length];
       onDateChange(next);
-    }, 1200);
+    }, 900);
     return () => window.clearInterval(id);
-  }, [playing, selectedDate, data.dates, onDateChange]);
+  }, [playing, selectedDate, yearDates, onDateChange]);
 
   const go = (delta: number) => {
     setPlaying(false);
-    const next = data.dates[(idx + delta + data.dates.length) % data.dates.length];
+    if (!yearDates.length) return;
+    const next =
+      yearDates[(yearIdx + delta + yearDates.length) % yearDates.length];
     onDateChange(next);
+  };
+
+  const selectYear = (y: string) => {
+    setPlaying(false);
+    setYear(y);
+    const first = data.dates.find((d) => d.startsWith(y));
+    if (first) onDateChange(first);
   };
 
   return (
@@ -77,7 +106,9 @@ export default function FloodTimeSeriesPanel({
             <Waves className="h-3.5 w-3.5 text-sky-400" />
             <h3 className="text-[11px] font-bold text-white">Flood water time series</h3>
             <span className="text-slate-500">·</span>
-            <span className="text-slate-400">Satellite water vs inundation · ha</span>
+            <span className="text-slate-400">
+              {data.dates.length} obs · {years[0]}–{years[years.length - 1]} · ha
+            </span>
             <span className="inline-flex items-center gap-1 text-sky-300">
               <span className="h-1.5 w-3 rounded-sm bg-sky-400" /> Water area
             </span>
@@ -130,6 +161,23 @@ export default function FloodTimeSeriesPanel({
           </div>
         </div>
 
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          {years.map((y) => (
+            <button
+              key={y}
+              type="button"
+              onClick={() => selectYear(y)}
+              className={`rounded px-2 py-0.5 text-[10px] font-semibold transition ${
+                y === year
+                  ? "bg-brand-500/25 text-brand-200 ring-1 ring-brand-400/40"
+                  : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+              }`}
+            >
+              {y}
+            </button>
+          ))}
+        </div>
+
         <div className="mb-2 flex flex-wrap items-center gap-2 text-[10px]">
           <span className="rounded bg-white/10 px-2 py-0.5 font-semibold text-white">
             {formatFloodDate(selectedDate)}
@@ -155,7 +203,7 @@ export default function FloodTimeSeriesPanel({
         </div>
 
         <div className="mb-2 flex gap-1 overflow-x-auto pb-0.5">
-          {data.dates.map((d) => {
+          {yearDates.map((d) => {
             const active = d === selectedDate;
             return (
               <button
@@ -198,7 +246,7 @@ export default function FloodTimeSeriesPanel({
                 tick={{ fill: "#94a3b8", fontSize: 9 }}
                 axisLine={{ stroke: "#475569" }}
                 tickLine={false}
-                interval={0}
+                minTickGap={28}
               />
               <YAxis
                 tick={{ fill: "#94a3b8", fontSize: 9 }}
@@ -238,8 +286,8 @@ export default function FloodTimeSeriesPanel({
                 fill={FLOOD_COLORS.waterArea}
                 fillOpacity={0.18}
                 strokeWidth={2}
-                dot={{ r: 3, fill: FLOOD_COLORS.waterArea, stroke: "#fff", strokeWidth: 1 }}
-                activeDot={{ r: 5 }}
+                dot={false}
+                activeDot={{ r: 4 }}
               />
               <Line
                 type="monotone"
@@ -247,8 +295,8 @@ export default function FloodTimeSeriesPanel({
                 name="flood"
                 stroke={FLOOD_COLORS.floodArea}
                 strokeWidth={2.25}
-                dot={{ r: 3, fill: FLOOD_COLORS.floodArea, stroke: "#fff", strokeWidth: 1 }}
-                activeDot={{ r: 5 }}
+                dot={false}
+                activeDot={{ r: 4 }}
               />
             </ComposedChart>
           </ResponsiveContainer>

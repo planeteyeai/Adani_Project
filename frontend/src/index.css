@@ -193,6 +193,80 @@ body {
   display: none;
 }
 
+/* Active-layers panel: highlight the map layer whose dropdown is open */
+@keyframes active-layer-blink {
+  0%,
+  100% {
+    opacity: 1;
+    stroke-opacity: 1;
+    filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.35));
+  }
+  50% {
+    opacity: 0.2;
+    stroke-opacity: 0.2;
+    filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.85));
+  }
+}
+
+.leaflet-overlay-pane path.active-layer-blink {
+  animation: active-layer-blink 0.75s ease-in-out infinite;
+}
+
+@keyframes active-layer-marker-blink {
+  0%,
+  100% {
+    opacity: 1;
+    filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.4));
+  }
+  50% {
+    opacity: 0.15;
+    filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.95));
+  }
+}
+
+.leaflet-overlay-pane path.active-layer-marker-blink,
+.leaflet-marker-icon.active-layer-marker-blink {
+  animation: active-layer-marker-blink 0.75s ease-in-out infinite;
+}
+
+@keyframes active-layer-row-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(77, 232, 255, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(77, 232, 255, 0.55);
+  }
+}
+
+.active-layer-row-open {
+  animation: active-layer-row-pulse 1.2s ease-in-out infinite;
+}
+
+/* Chainage DivIcon labels (viewport-culled canvas layer) */
+.geovision-chainage-icon {
+  background: transparent !important;
+  border: none !important;
+}
+.geovision-chainage-badge {
+  display: inline-block;
+  transform: translate(6px, -50%);
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(147, 197, 253, 0.55);
+  color: #f8fafc;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+  padding: 1px 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* Leaflet popups — point detail panel */
 .geovision-popup .leaflet-popup-content-wrapper {
   background: #0f1729;
@@ -292,4 +366,16 @@ body {
   font-weight: 500;
   color: #cbd5e1;
   word-break: break-word;
+}
+
+/* Measure mode: map clicks add vertices only — ignore vector/marker hit targets */
+.leaflet-container.measure-mode {
+  cursor: crosshair !important;
+}
+.leaflet-container.measure-mode .leaflet-overlay-pane,
+.leaflet-container.measure-mode .leaflet-marker-pane,
+.leaflet-container.measure-mode .leaflet-shadow-pane,
+.leaflet-container.measure-mode .leaflet-tooltip-pane,
+.leaflet-container.measure-mode .leaflet-popup-pane {
+  pointer-events: none !important;
 }

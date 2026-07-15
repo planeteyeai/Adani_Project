@@ -42,7 +42,7 @@ export async function fetchFloodTimeseries(): Promise<FloodData | null> {
   try {
     if (!cache) {
       const res = await fetch("/flood_timeseries.json", {
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(60000),
       });
       if (!res.ok) return null;
       cache = (await res.json()) as FloodData;

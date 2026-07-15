@@ -11,10 +11,21 @@ function treeTooltipHtml(t: TreePoint): string {
     t.chainage_m != null && Number.isFinite(t.chainage_m)
       ? `${(t.chainage_m / 1000).toFixed(2)} km`
       : null;
+  const height =
+    t.avg_height_m != null && Number.isFinite(t.avg_height_m)
+      ? `H ${t.avg_height_m.toFixed(1)} m`
+      : null;
+  const area =
+    t.area_m2 != null && Number.isFinite(t.area_m2)
+      ? `Area ${t.area_m2.toFixed(1)} m²`
+      : null;
   return [
     `<span class="font-semibold">🌳 ${t.id}</span>`,
     chKm ? `<span class="text-slate-400">Ch ${chKm}</span>` : null,
     t.zone ? `<span class="text-slate-400">${t.zone}</span>` : null,
+    height || area
+      ? `<span class="text-slate-400">${[height, area].filter(Boolean).join(" · ")}</span>`
+      : null,
     `<span class="text-[10px] text-slate-500">${t.lat.toFixed(6)}, ${t.lon.toFixed(6)}</span>`,
   ]
     .filter(Boolean)
@@ -25,7 +36,14 @@ function treeTooltipHtml(t: TreePoint): string {
  * Canvas tree overlay — draws only trees in the current viewport.
  * Emoji when zoomed in / sparse; green dots when dense (keeps map smooth).
  */
-export default function TreesLayer({ trees }: { trees: TreePoint[] }) {
+export default function TreesLayer({
+  trees,
+  interactive = true,
+}: {
+  trees: TreePoint[];
+  /** When false (e.g. measure mode), skip hover tooltips. */
+  interactive?: boolean;
+}) {
   const map = useMap();
 
   useEffect(() => {
@@ -163,8 +181,10 @@ export default function TreesLayer({ trees }: { trees: TreePoint[] }) {
     };
 
     map.on("move zoom viewreset resize", scheduleDraw);
-    map.on("mousemove", onMove);
-    map.on("mouseout", onOut);
+    if (interactive) {
+      map.on("mousemove", onMove);
+      map.on("mouseout", onOut);
+    }
     scheduleDraw();
 
     return () => {
@@ -176,9 +196,9 @@ export default function TreesLayer({ trees }: { trees: TreePoint[] }) {
         map.closeTooltip(tooltip);
         tooltip = null;
       }
-      L.DomUtil.remove(canvas);
+      canvas.remove();
     };
-  }, [map, trees]);
+  }, [map, trees, interactive]);
 
   return null;
 }

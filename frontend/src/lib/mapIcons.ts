@@ -70,6 +70,23 @@ export function createTollPlazaIcon(): L.DivIcon {
   });
 }
 
+export function createAdjacentRoadIcon(): L.DivIcon {
+  return L.divIcon({
+    className: "geovision-adjacent-road-icon",
+    html: `<div style="
+      width:28px;height:28px;border-radius:8px;
+      background:linear-gradient(135deg,#38bdf8,#0284c7);
+      border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.45);
+      display:flex;align-items:center;justify-content:center;
+      font-size:8px;font-weight:800;color:#082f49;letter-spacing:-0.3px;
+    ">ADJ</div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -14],
+    tooltipAnchor: [14, -12],
+  });
+}
+
 const ROAD_CATEGORY_RE = /\d[\d+]*-?\s*LANE/i;
 
 export function isRoadCategoryName(name: string): boolean {

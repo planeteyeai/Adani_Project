@@ -1,11 +1,20 @@
 import L from "leaflet";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Circle,
   CircleMarker,
   GeoJSON,
   MapContainer,
   Marker,
+  Polygon,
   Polyline,
   Popup,
   TileLayer,
@@ -14,18 +23,40 @@ import {
   useMapEvents,
 } from "react-leaflet";
 import {
+  Activity,
+  Building2,
   ChevronDown,
   CloudRain,
+  Compass,
   Crosshair,
+  Droplets,
+  Factory,
+  Fence,
+  GitBranch,
+  Home,
+  LandPlot,
   Layers as LayersIcon,
   Box,
+  MapPinned,
   Maximize2,
   MapPin,
+  Milestone,
   Mountain,
+  MountainSnow,
+  Pentagon,
+  Redo2,
   Route,
   Ruler,
+  Trees,
+  Undo2,
+  TrainFront,
+  TowerControl,
+  Users,
+  Waves,
   X,
+  Zap,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import ElevationGraphModal, { type ElevationPoint, type ElevationScrubSample } from "../components/ElevationGraphModal";
 import BoreholeCard from "../components/BoreholeCard";
 import WeatherForecastModal from "../components/WeatherForecastModal";
@@ -39,10 +70,27 @@ import { ANALYSIS_OVERLAYS, ANALYSIS_OVERLAY_GROUPS, BASEMAPS, type AnalysisOver
 import { fetchProject } from "../lib/api";
 import { createChainageResolver, sampleChainageRange } from "../lib/chainage";
 import { elevationMapSample, fetchElevationProfile } from "../lib/elevation";
+import {
+  MEASURE_TOOLS,
+  bearingDeg,
+  formatBearing,
+  haversineKm,
+  pathLengthKm,
+  polygonAreaM2,
+  type LatLon,
+  type MeasureTool,
+} from "../lib/measure";
+import {
+  ELEVATED_VIADUCT_COLOR,
+  fetchElevatedScour,
+  type ElevatedScourData,
+} from "../lib/elevatedScour";
 import { fetchAffectedHouses, type AffectedHousesData } from "../lib/affectedHouses";
-import { fetchWaterBodies, type WaterBodiesData } from "../lib/waterBodies";
+import { fetchWaterBodies, fetchWaterways, type WaterBodiesData } from "../lib/waterBodies";
+import { fetchVillages, type VillagesData } from "../lib/villages";
 import { fetchLulc, type LulcData } from "../lib/lulc";
 import { fetchContours05m, fetchContours1m, type ContoursData } from "../lib/contours";
+import { fetchAdjacentRoads, type AdjacentRoadsData } from "../lib/adjacentRoads";
 import { fetchRoadNetwork, highwayStyle, type RoadNetworkData } from "../lib/roadNetwork";
 import {
   fetchRailwayLines,
@@ -64,14 +112,16 @@ import {
   type TransmissionLinesData,
   type TransmissionTowersData,
 } from "../lib/transmission";
-import { fetchTrees, type TreesData } from "../lib/trees";
+import { fetchTrees, treesSummaryInfo, type TreesData, type TreesSummaryInfo } from "../lib/trees";
 import { fetchFloodTimeseries, type FloodData } from "../lib/flood";
 import TreesLayer from "../components/TreesLayer";
 import ContoursLayer from "../components/ContoursLayer";
 import FloodLayer from "../components/FloodLayer";
 import FloodTimeSeriesPanel from "../components/FloodTimeSeriesPanel";
+import ChainageLayer from "../components/ChainageLayer";
 import { boreholeSummary, fetchGeotech, type Borehole, type GeotechData } from "../lib/geotech";
 import {
+  createAdjacentRoadIcon,
   createRoadCategoryIcon,
   createStructureIcon,
   createTollPlazaIcon,
@@ -81,10 +131,24 @@ import {
   structureIconUrl,
 } from "../lib/mapIcons";
 import {
+  drainInfo,
+  elevatedStructureInfo,
+  projectAlignmentInfo,
+  reWallInfo,
   scheduleBFromStats,
+  serviceRoadInfo,
+  shoulderInfo,
   structureColor,
+  structuresPointsInfo,
   structureTypeLabel,
+  type DrainInfo,
+  type ElevatedStructureInfo,
+  type ProjectAlignmentInfo,
+  type ReWallInfo,
   type ScheduleBStructure,
+  type ServiceRoadInfo,
+  type ShoulderInfo,
+  type StructuresPointsInfo,
 } from "../lib/scheduleB";
 import type { Project } from "../lib/types";
 
@@ -104,6 +168,7 @@ type SbLineFeature = {
   to: number;
   label: string;
   details: Record<string, unknown>;
+  color?: string;
 };
 
 type AlignmentDetails = {
@@ -131,6 +196,7 @@ const DEFAULT_OVERLAYS: Record<string, boolean> = {
   toll_plazas: false,
   road_categories: false,
   road_network: false,
+  adjacent_roads: false,
   railway_lines: false,
   railway_stations: false,
   railway_platforms: false,
@@ -149,6 +215,7 @@ const DEFAULT_OVERLAYS: Record<string, boolean> = {
   trees: false,
   contours_1m: false,
   contours_0_5m: false,
+  villages: false,
   affected_houses: false,
   flood: false,
   corridor: false,
@@ -176,11 +243,15 @@ export default function MapExplorer() {
   const [elevationPoints, setElevationPoints] = useState<ElevationPoint[]>([]);
   const [geotech, setGeotech] = useState<GeotechData | null>(null);
   const [affectedHouses, setAffectedHouses] = useState<AffectedHousesData | null>(null);
+  const [elevatedScour, setElevatedScour] = useState<ElevatedScourData | null>(null);
   const [waterBodies, setWaterBodies] = useState<WaterBodiesData | null>(null);
+  const [waterways, setWaterways] = useState<WaterBodiesData | null>(null);
+  const [villagesData, setVillagesData] = useState<VillagesData | null>(null);
   const [lulcData, setLulcData] = useState<LulcData | null>(null);
   const [contours1m, setContours1m] = useState<ContoursData | null>(null);
   const [contours05m, setContours05m] = useState<ContoursData | null>(null);
   const [roadNetwork, setRoadNetwork] = useState<RoadNetworkData | null>(null);
+  const [adjacentRoads, setAdjacentRoads] = useState<AdjacentRoadsData | null>(null);
   const [railwayLines, setRailwayLines] = useState<RailwayLinesData | null>(null);
   const [railwayStations, setRailwayStations] = useState<RailwayStationsData | null>(null);
   const [railwayPlatforms, setRailwayPlatforms] = useState<RailwayPlatformsData | null>(null);
@@ -203,6 +274,8 @@ export default function MapExplorer() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [baseMapOpen, setBaseMapOpen] = useState(false);
   const [alignmentDetails, setAlignmentDetails] = useState<AlignmentDetails | null>(null);
+  /** Which active-layer accordion is open on the right panel (`null` = all collapsed). */
+  const [expandedActiveLayerId, setExpandedActiveLayerId] = useState<string | null>(null);
   const [mapMode, setMapMode] = useState<"2d" | "3d">("2d");
   const overlaysBefore3dRef = useRef<{
     overlays: Record<string, boolean>;
@@ -210,8 +283,14 @@ export default function MapExplorer() {
   } | null>(null);
   const [cursor, setCursor] = useState<[number, number] | null>(null);
   const [mapScaleLabel, setMapScaleLabel] = useState("—");
-  const [measure, setMeasure] = useState(false);
-  const [measurePts, setMeasurePts] = useState<[number, number][]>([]);
+  const [measureTool, setMeasureTool] = useState<MeasureTool | null>(null);
+  const [measureMenuOpen, setMeasureMenuOpen] = useState(false);
+  const [measurePts, setMeasurePts] = useState<LatLon[]>([]);
+  const [measurePast, setMeasurePast] = useState<LatLon[][]>([]);
+  const [measureFuture, setMeasureFuture] = useState<LatLon[][]>([]);
+  const measure = measureTool != null;
+  const canMeasureUndo = measurePast.length > 0;
+  const canMeasureRedo = measureFuture.length > 0;
   const [mapInstance, setMapInstance] = useState<L.Map | null>(null);
   const [streetViewDragging, setStreetViewDragging] = useState(false);
   const [streetViewPoint, setStreetViewPoint] = useState<{ lat: number; lon: number } | null>(null);
@@ -234,11 +313,15 @@ export default function MapExplorer() {
     fetchElevationProfile().then(setElevationPoints);
     fetchGeotech().then(setGeotech);
     fetchAffectedHouses().then(setAffectedHouses);
+    fetchElevatedScour().then(setElevatedScour);
     fetchWaterBodies().then(setWaterBodies);
+    fetchWaterways().then(setWaterways);
+    fetchVillages().then(setVillagesData);
     fetchLulc().then(setLulcData);
     fetchContours1m().then(setContours1m);
     fetchContours05m().then(setContours05m);
     fetchRoadNetwork().then(setRoadNetwork);
+    fetchAdjacentRoads().then(setAdjacentRoads);
     fetchRailwayLines().then(setRailwayLines);
     fetchRailwayStations().then(setRailwayStations);
     fetchRailwayPlatforms().then(setRailwayPlatforms);
@@ -272,7 +355,7 @@ export default function MapExplorer() {
 
   const base = BASEMAPS.find((b) => b.id === baseId)!;
 
-  const { lineFeatures, points } = useMemo(() => {
+  const { lineFeatures, chainageTickLines, points } = useMemo(() => {
     const lineFeatures: Array<{
       coords: number[][];
       stroke: string;
@@ -281,13 +364,32 @@ export default function MapExplorer() {
       name?: string;
       folder?: string;
     }> = [];
+    const chainageTickLines: Array<{
+      coords: number[][];
+      stroke: string;
+    }> = [];
     const points: MapPoint[] = [];
     if (project?.geojson) {
       for (const f of project.geojson.features) {
         if (f.geometry.type === "LineString") {
           const props = f.properties ?? {};
+          const coords = f.geometry.coordinates as number[][];
+          // KMZ station ticks are short 2-point crossbars — keep them out of the main
+          // alignment strokes (which force a min weight + fat hit strip).
+          if (coords.length === 2) {
+            const a = coords[0];
+            const b = coords[1];
+            const lenM = haversineKm(a[1], a[0], b[1], b[0]) * 1000;
+            if (lenM < 90) {
+              chainageTickLines.push({
+                coords,
+                stroke: String(props.stroke ?? "#e2e8f0"),
+              });
+              continue;
+            }
+          }
           lineFeatures.push({
-            coords: f.geometry.coordinates as number[][],
+            coords,
             stroke: String(props.stroke ?? "#c026d3"),
             weight: Number(props.stroke_width ?? 4) || 4,
             lengthKm: Number(props.length_km ?? 0) || 0,
@@ -308,7 +410,7 @@ export default function MapExplorer() {
         }
       }
     }
-    return { lineFeatures, points };
+    return { lineFeatures, chainageTickLines, points };
   }, [project]);
 
   const alignmentLegend = useMemo(() => {
@@ -380,6 +482,19 @@ export default function MapExplorer() {
     [points]
   );
 
+  /** One marker per station label (KMZ often duplicates LHS/RHS points). */
+  const uniqueChainagePoints = useMemo(() => {
+    const byName = new Map<string, MapPoint>();
+    for (const p of chainagePoints) {
+      if (!byName.has(p.name)) byName.set(p.name, p);
+    }
+    return [...byName.values()].sort((a, b) => {
+      const [ak, am] = a.name.split("+").map(Number);
+      const [bk, bm] = b.name.split("+").map(Number);
+      return ak - bk || am - bm;
+    });
+  }, [chainagePoints]);
+
   const tollPlazaPoints = useMemo(
     () => points.filter((p) => /toll\s*plaza/i.test(p.name)),
     [points]
@@ -391,6 +506,7 @@ export default function MapExplorer() {
   );
 
   const tollPlazaIcon = useMemo(() => createTollPlazaIcon(), []);
+  const adjacentRoadIcon = useMemo(() => createAdjacentRoadIcon(), []);
 
   const scheduleB = useMemo(() => scheduleBFromStats(project?.stats ?? {}), [project]);
 
@@ -443,10 +559,24 @@ export default function MapExplorer() {
     };
 
     return {
-      elevated: build(scheduleB?.elevated, {
-        offset: 0,
-        label: (r) => `Elevated ${r.from_km}–${r.to_km} km`,
-      }),
+      elevated: (elevatedScour?.features ?? []).map((f) => ({
+        positions: f.geometry.coordinates.map(
+          ([lon, lat]) => [lat, lon] as [number, number],
+        ),
+        from: f.properties.from_km,
+        to: f.properties.to_km,
+        label: f.properties.name,
+        details: {
+          hydraulic_zone: f.properties.hydraulic_zone,
+          from_km: f.properties.from_km,
+          to_km: f.properties.to_km,
+          length_km: f.properties.length_km,
+          scour_min_m: f.properties.scour_min_m,
+          scour_max_m: f.properties.scour_max_m,
+          screening_points: f.properties.point_count,
+          source: "Elevated Section Scour Screening",
+        },
+      })),
       service_roads: build(scheduleB?.service_roads, {
         offset: 0.00016,
         label: (r) => `Service Road ${r.from_km}–${r.to_km} km`,
@@ -468,7 +598,59 @@ export default function MapExplorer() {
         label: (r) => `Paved Shoulder ${r.from_km}–${r.to_km} km`,
       }),
     };
-  }, [scheduleB, resolveChainage]);
+  }, [scheduleB, resolveChainage, elevatedScour]);
+
+  const elevatedInfo = useMemo(
+    () => elevatedStructureInfo(scheduleB),
+    [scheduleB],
+  );
+
+  const serviceRoadSummary = useMemo(
+    () => serviceRoadInfo(scheduleB),
+    [scheduleB],
+  );
+
+  const reWallSummary = useMemo(
+    () => reWallInfo(scheduleB),
+    [scheduleB],
+  );
+
+  const drainSummary = useMemo(
+    () => drainInfo(scheduleB),
+    [scheduleB],
+  );
+
+  const shoulderSummary = useMemo(
+    () => shoulderInfo(scheduleB),
+    [scheduleB],
+  );
+
+  const structuresSummary = useMemo(
+    () => structuresPointsInfo(scheduleB),
+    [scheduleB],
+  );
+
+  const alignmentSummary = useMemo(
+    () => projectAlignmentInfo(scheduleB),
+    [scheduleB],
+  );
+
+  const treesSummary = useMemo(() => treesSummaryInfo(treesData), [treesData]);
+
+  /** SVG renderer so CSS blink animation works (map preferCanvas would otherwise draw canvas paths). */
+  const blinkSvgRenderer = useMemo(() => L.svg({ padding: 0.5 }), []);
+  const layerBlinkBright = useLayerBlinkPulse(expandedActiveLayerId != null);
+
+  const activeOverlayItems = useMemo(
+    () => ANALYSIS_OVERLAYS.filter((o) => overlays[o.id]),
+    [overlays],
+  );
+
+  useEffect(() => {
+    if (expandedActiveLayerId && !overlays[expandedActiveLayerId]) {
+      setExpandedActiveLayerId(null);
+    }
+  }, [overlays, expandedActiveLayerId]);
 
   const center: [number, number] = project
     ? [project.stats.center[1], project.stats.center[0]]
@@ -484,7 +666,7 @@ export default function MapExplorer() {
     return { lat: center[0], lon: center[1] };
   }, [cursor, center]);
 
-  const measureLength = useMemo(() => haversinePath(measurePts), [measurePts]);
+  const measureMeta = MEASURE_TOOLS.find((t) => t.id === measureTool) ?? null;
 
   const structureIconCache = useMemo(() => {
     const cache = new Map<string, L.Icon>();
@@ -519,6 +701,79 @@ export default function MapExplorer() {
       .filter((p): p is ElevationPoint & { latitude: number; longitude: number } => p != null);
   }, [elevationPoints, resolveChainage]);
 
+  const measureResult = useMemo(() => {
+    if (!measureTool) return null;
+    const pts = measurePts;
+    if (measureTool === "distance") {
+      if (pts.length < 2) return { lines: ["Click to add points along a path"] };
+      const km = pathLengthKm(pts);
+      return {
+        lines: [
+          `Distance: ${km.toFixed(4)} km (${(km * 1000).toFixed(1)} m)`,
+          `${pts.length} points · click to add · Esc / ruler to exit`,
+        ],
+      };
+    }
+    if (measureTool === "area") {
+      if (pts.length < 3) return { lines: [`Area · need ${3 - pts.length} more point(s)`] };
+      const m2 = polygonAreaM2(pts);
+      const ha = m2 / 10_000;
+      return {
+        lines: [
+          `Area: ${m2.toLocaleString(undefined, { maximumFractionDigits: 0 })} m² · ${ha.toFixed(3)} ha`,
+          `${pts.length} vertices · click to add`,
+        ],
+      };
+    }
+    if (measureTool === "bearing") {
+      if (pts.length < 2) return { lines: ["Bearing · click start, then end"] };
+      const deg = bearingDeg(pts[0][0], pts[0][1], pts[1][0], pts[1][1]);
+      const km = haversineKm(pts[0][0], pts[0][1], pts[1][0], pts[1][1]);
+      return {
+        lines: [
+          `Bearing: ${formatBearing(deg)}`,
+          `Length: ${km.toFixed(4)} km · click to restart`,
+        ],
+      };
+    }
+    if (measureTool === "elev") {
+      if (pts.length < 2) return { lines: ["Elevation Δ · click two survey points"] };
+      const nearest = (lat: number, lon: number) => {
+        let best: (typeof elevationMapPoints)[number] | null = null;
+        let bestD = Infinity;
+        for (const p of elevationMapPoints) {
+          const d = haversineKm(lat, lon, p.latitude, p.longitude) * 1000;
+          if (d < bestD) {
+            bestD = d;
+            best = p;
+          }
+        }
+        return best && bestD <= 150 ? { p: best, distM: bestD } : null;
+      };
+      const a = nearest(pts[0][0], pts[0][1]);
+      const b = nearest(pts[1][0], pts[1][1]);
+      if (!a || !b) {
+        return {
+          lines: [
+            !a && !b
+              ? "No survey points within 150 m of clicks"
+              : !a
+                ? "No survey point near first click"
+                : "No survey point near second click",
+          ],
+        };
+      }
+      const dElev = Number(b.p.elevation) - Number(a.p.elevation);
+      return {
+        lines: [
+          `Elev Δ: ${dElev >= 0 ? "+" : ""}${dElev.toFixed(2)} m`,
+          `${Number(a.p.elevation).toFixed(2)} → ${Number(b.p.elevation).toFixed(2)} m · ch ${a.p.chainage} → ${b.p.chainage}`,
+        ],
+      };
+    }
+    return null;
+  }, [measureTool, measurePts, elevationMapPoints]);
+
   /** Fast lookup: branch + chainage → map point */
   const elevationPointIndex = useMemo(() => {
     const map = new Map<string, ElevationPoint & { latitude: number; longitude: number }>();
@@ -530,11 +785,89 @@ export default function MapExplorer() {
 
   const [elevationScrubbing, setElevationScrubbing] = useState(false);
 
-  const handleStreetViewDrop = useCallback((lat: number, lon: number) => {
-    setMeasure(false);
+  const resetMeasureHistory = useCallback(() => {
     setMeasurePts([]);
-    setStreetViewPoint({ lat, lon });
+    setMeasurePast([]);
+    setMeasureFuture([]);
   }, []);
+
+  const commitMeasurePts = useCallback((next: LatLon[] | ((prev: LatLon[]) => LatLon[])) => {
+    setMeasurePts((prev) => {
+      const resolved = typeof next === "function" ? next(prev) : next;
+      setMeasurePast((past) => [...past, prev]);
+      setMeasureFuture([]);
+      return resolved;
+    });
+  }, []);
+
+  const undoMeasure = useCallback(() => {
+    setMeasurePast((past) => {
+      if (!past.length) return past;
+      const prev = past[past.length - 1];
+      setMeasurePts((current) => {
+        setMeasureFuture((future) => [current, ...future]);
+        return prev;
+      });
+      return past.slice(0, -1);
+    });
+  }, []);
+
+  const redoMeasure = useCallback(() => {
+    setMeasureFuture((future) => {
+      if (!future.length) return future;
+      const [next, ...rest] = future;
+      setMeasurePts((current) => {
+        setMeasurePast((past) => [...past, current]);
+        return next;
+      });
+      return rest;
+    });
+  }, []);
+
+  const handleStreetViewDrop = useCallback((lat: number, lon: number) => {
+    setMeasureTool(null);
+    setMeasureMenuOpen(false);
+    resetMeasureHistory();
+    setStreetViewPoint({ lat, lon });
+  }, [resetMeasureHistory]);
+
+  const startMeasureTool = useCallback((tool: MeasureTool) => {
+    setMeasureTool(tool);
+    resetMeasureHistory();
+    setMeasureMenuOpen(false);
+    setAlignmentDetails(null);
+    setElevationFocus(null);
+    setElevationCrossSection(null);
+    setSelectedBorehole(null);
+  }, [resetMeasureHistory]);
+
+  const exitMeasure = useCallback(() => {
+    setMeasureTool(null);
+    setMeasureMenuOpen(false);
+    resetMeasureHistory();
+  }, [resetMeasureHistory]);
+
+  useEffect(() => {
+    if (!measureTool && !measureMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        exitMeasure();
+        setMeasureMenuOpen(false);
+        return;
+      }
+      if (!measureTool) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undoMeasure();
+      } else if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
+        e.preventDefault();
+        redoMeasure();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [measureTool, measureMenuOpen, exitMeasure, undoMeasure, redoMeasure]);
 
   const handleElevationPointClick = (point: ElevationPoint) => {
     const key = `${point.branch ?? "centerline"}:${point.chainage}`;
@@ -632,6 +965,7 @@ export default function MapExplorer() {
       lat: number,
       lon: number,
     ) => {
+      if (measure) return;
       // Nearest centreline elevation point → chainage (km) + ground elevation.
       let nearest: (ElevationPoint & { latitude: number; longitude: number }) | null = null;
       let bestD = Infinity;
@@ -692,7 +1026,7 @@ export default function MapExplorer() {
         nearestStructure,
       });
     },
-    [elevationMapPoints, scheduleB, structureMarkers, primaryAlignmentFolder, lineFeatures],
+    [elevationMapPoints, scheduleB, structureMarkers, primaryAlignmentFolder, lineFeatures, measure],
   );
 
   return (
@@ -739,6 +1073,7 @@ export default function MapExplorer() {
             substations={substations}
             transmissionTowers={transmissionTowers}
             waterBodies={waterBodies}
+            waterways={waterways}
             lulcData={lulcData}
             treesData={treesData}
             affectedHouses={affectedHouses}
@@ -754,7 +1089,7 @@ export default function MapExplorer() {
         <MapContainer
           center={center}
           zoom={12}
-          className="h-full w-full"
+          className={`h-full w-full${measure ? " measure-mode" : ""}`}
           zoomControl={false}
           preferCanvas
         >
@@ -796,6 +1131,7 @@ export default function MapExplorer() {
               points={elevationMapPoints}
               focus={elevationFocus}
               onPointClick={handleElevationPointClick}
+              interactive={!measure}
             />
           )}
           <FlyToElevationPoint
@@ -806,7 +1142,13 @@ export default function MapExplorer() {
           <CursorTracker onMove={setCursor} />
           <ZoomTracker onScaleLabel={setMapScaleLabel} />
           <MapInstanceCapture onReady={setMapInstance} />
-          {measure && <MeasureHandler pts={measurePts} setPts={setMeasurePts} />}
+          {measureTool && (
+            <MeasureHandler
+              maxPts={measureMeta?.maxPts ?? null}
+              commitPts={commitMeasurePts}
+            />
+          )}
+          <MeasureModeEffects active={measure} />
 
           {/* Right-of-way corridor buffer (drawn under alignment) */}
           {overlays.corridor &&
@@ -853,8 +1195,14 @@ export default function MapExplorer() {
                       weight,
                       opacity: 0.95,
                       interactive: true,
-                      className: "cursor-pointer",
+                      className:
+                        expandedActiveLayerId === "alignment"
+                          ? "cursor-pointer active-layer-blink"
+                          : "cursor-pointer",
                     }}
+                    {...(expandedActiveLayerId === "alignment"
+                      ? { renderer: blinkSvgRenderer }
+                      : {})}
                     eventHandlers={{ click: onClick }}
                   >
                     {(line.folder || line.name) && (
@@ -871,58 +1219,79 @@ export default function MapExplorer() {
 
           {/* Schedule-B linear corridor features */}
           {overlays.sb_elevated && (
-            <SbLineLayer features={sbLines.elevated} color="#12c9b0" weight={7} opacity={0.55} unit="Elevated viaduct" />
+            <SbLineLayer
+              features={sbLines.elevated}
+              color={ELEVATED_VIADUCT_COLOR}
+              weight={8}
+              opacity={1}
+              unit="Elevated viaduct"
+              blink={expandedActiveLayerId === "sb_elevated"}
+            />
           )}
           {overlays.sb_ramps && (
-            <SbLineLayer features={sbLines.ramps} color="#eab308" weight={4} opacity={0.85} unit="Interchange ramp" />
+            <SbLineLayer
+              features={sbLines.ramps}
+              color="#eab308"
+              weight={4}
+              opacity={0.85}
+              unit="Interchange ramp"
+              blink={expandedActiveLayerId === "sb_ramps"}
+            />
           )}
           {overlays.sb_service_roads && (
-            <SbLineLayer features={sbLines.service_roads} color="#3b82f6" weight={3} opacity={0.85} dash="6 5" unit="Service road" />
+            <SbLineLayer
+              features={sbLines.service_roads}
+              color="#3b82f6"
+              weight={3}
+              opacity={0.85}
+              dash="6 5"
+              unit="Service road"
+              blink={expandedActiveLayerId === "sb_service_roads"}
+            />
           )}
           {overlays.sb_re_walls && (
-            <SbLineLayer features={sbLines.re_walls} color="#f97316" weight={4} opacity={0.9} unit="RE wall" />
+            <SbLineLayer
+              features={sbLines.re_walls}
+              color="#f97316"
+              weight={4}
+              opacity={0.9}
+              unit="RE wall"
+              blink={expandedActiveLayerId === "sb_re_walls"}
+            />
           )}
           {overlays.sb_drains && (
-            <SbLineLayer features={sbLines.drains} color="#06b6d4" weight={2.5} opacity={0.85} dash="2 5" unit="Drain" />
+            <SbLineLayer
+              features={sbLines.drains}
+              color="#06b6d4"
+              weight={2.5}
+              opacity={0.85}
+              dash="2 5"
+              unit="Drain"
+              blink={expandedActiveLayerId === "sb_drains"}
+            />
           )}
           {overlays.sb_paved_shoulders && (
-            <SbLineLayer features={sbLines.paved_shoulders} color="#94a3b8" weight={3} opacity={0.7} dash="4 4" unit="Paved shoulder" />
+            <SbLineLayer
+              features={sbLines.paved_shoulders}
+              color="#94a3b8"
+              weight={3}
+              opacity={0.7}
+              dash="4 4"
+              unit="Paved shoulder"
+              blink={expandedActiveLayerId === "sb_paved_shoulders"}
+            />
           )}
 
-          {/* Markers — click for full detail popup */}
-          {overlays.markers &&
-            chainagePoints.map((p, i) => (
-              <Circle
-                key={"pt" + i}
-                center={p.coord}
-                radius={18}
-                pathOptions={{
-                  color: "#3b82f6",
-                  fillColor: "#6aa8ff",
-                  fillOpacity: 0.7,
-                  weight: 1,
-                  className: "geovision-marker",
-                }}
-                eventHandlers={{
-                  mouseover: (e) => {
-                    e.target.setStyle({ fillOpacity: 0.95, weight: 2 });
-                    e.target.getElement()?.classList.add("geovision-marker--hover");
-                  },
-                  mouseout: (e) => {
-                    e.target.setStyle({ fillOpacity: 0.7, weight: 1 });
-                    e.target.getElement()?.classList.remove("geovision-marker--hover");
-                  },
-                }}
-              >
-                <Tooltip direction="top" offset={[0, -10]} opacity={0.95} className="geovision-tooltip">
-                  <span className="font-semibold">{p.name}</span>
-                  <span className="ml-1.5 text-slate-400">· click for details</span>
-                </Tooltip>
-                <Popup className="geovision-popup" minWidth={260} maxWidth={340}>
-                  <PointPopupContent point={p} project={project} index={i} />
-                </Popup>
-              </Circle>
-            ))}
+          {/* Chainage ticks + IDs (canvas, viewport-culled — avoids 1k React layers) */}
+          {(overlays.alignment || overlays.markers) && (
+            <ChainageLayer
+              ticks={chainageTickLines}
+              stations={uniqueChainagePoints}
+              showTicks={overlays.alignment || overlays.markers}
+              showLabels={overlays.markers}
+              blink={expandedActiveLayerId === "markers"}
+            />
+          )}
 
           {/* Toll plaza locations from KMZ */}
           {overlays.toll_plazas &&
@@ -960,6 +1329,35 @@ export default function MapExplorer() {
                 </Marker>
               );
             })}
+
+          {/* Adjacent road access points */}
+          {overlays.adjacent_roads &&
+            adjacentRoads?.points.map((p) => (
+              <Marker
+                key={p.id}
+                position={[p.lat, p.lon]}
+                icon={adjacentRoadIcon}
+              >
+                <Tooltip direction="top" offset={[0, -16]} opacity={0.95} className="geovision-tooltip">
+                  <span className="font-semibold">{p.name}</span>
+                  <br />
+                  <span className="text-slate-400">{p.id}</span>
+                  <br />
+                  <span className="text-slate-500">
+                    {p.lat.toFixed(6)}, {p.lon.toFixed(6)}
+                  </span>
+                </Tooltip>
+                <Popup className="geovision-popup" minWidth={220} maxWidth={300}>
+                  <div className="space-y-1 text-xs">
+                    <div className="font-semibold text-slate-100">{p.name}</div>
+                    <div className="text-slate-400">{p.id}</div>
+                    <div className="tabular-nums text-slate-500">
+                      {p.lat.toFixed(6)}, {p.lon.toFixed(6)}
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            ))}
 
           {/* OSM road network within 1 km buffer */}
           {overlays.road_network && roadNetwork && (
@@ -1178,7 +1576,14 @@ export default function MapExplorer() {
 
               if (icon) {
                 return (
-                  <Marker key={"sb" + i} position={s.coord} icon={icon}>
+                  <Marker
+                    key={"sb" + i}
+                    position={s.coord}
+                    icon={icon}
+                    opacity={
+                      expandedActiveLayerId === "structures" ? (layerBlinkBright ? 1 : 0.2) : 1
+                    }
+                  >
                     <Tooltip direction="top" offset={[0, -44]} opacity={0.95} className="geovision-tooltip">
                       <span className="font-semibold">{s.label}</span>
                       <span className="ml-1.5 text-slate-400">· Ch {s.chainage_km} km</span>
@@ -1204,7 +1609,14 @@ export default function MapExplorer() {
                     fillColor: structureColor(s.type),
                     fillOpacity: 0.9,
                     weight: 2,
+                    className:
+                      expandedActiveLayerId === "structures"
+                        ? "active-layer-marker-blink"
+                        : undefined,
                   }}
+                  {...(expandedActiveLayerId === "structures"
+                    ? { renderer: blinkSvgRenderer }
+                    : {})}
                 >
                   <Tooltip direction="top" offset={[0, -10]} opacity={0.95} className="geovision-tooltip">
                     <span className="font-semibold">{s.label}</span>
@@ -1221,16 +1633,16 @@ export default function MapExplorer() {
               );
             })}
 
-          {/* Water bodies */}
+          {/* Waterways + water bodies (same layer toggle) */}
           {overlays.water_bodies && waterBodies && (
             <GeoJSON
-              key="water-bodies"
+              key={`water-bodies-${waterBodies.source_file ?? "legacy"}-${waterBodies.count}`}
               data={waterBodies}
               style={() => ({
-                color: "#0284c7",
-                weight: 1.5,
-                fillColor: "#0ea5e9",
-                fillOpacity: 0.45,
+                color: "#0369a1",
+                weight: 1.25,
+                fillColor: "#38bdf8",
+                fillOpacity: 0.35,
               })}
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as {
@@ -1240,8 +1652,77 @@ export default function MapExplorer() {
                 };
                 const label = props.name ?? `Water body ${props.index ?? ""}`;
                 layer.bindTooltip(
-                  `<span class="font-semibold">${label}</span><br/><span class="text-slate-400">${props.id ?? ""}</span>`,
+                  `<span class="font-semibold">${label}</span><br/><span class="text-slate-400">Water body · ${props.id ?? ""}</span>`,
                   { direction: "top", opacity: 0.95, className: "geovision-tooltip" },
+                );
+              }}
+            />
+          )}
+          {overlays.water_bodies && waterways && (
+            <GeoJSON
+              key={`waterways-${waterways.source_file ?? "legacy"}-${waterways.count}`}
+              data={waterways}
+              style={() => ({
+                color: "#075985",
+                weight: 1.75,
+                fillColor: "#0ea5e9",
+                fillOpacity: 0.45,
+              })}
+              onEachFeature={(feature, layer) => {
+                const props = feature.properties as {
+                  id?: string;
+                  name?: string;
+                  index?: number;
+                };
+                const label = props.name ?? `Waterway ${props.index ?? ""}`;
+                layer.bindTooltip(
+                  `<span class="font-semibold">${label}</span><br/><span class="text-slate-400">Waterway · ${props.id ?? ""}</span>`,
+                  { direction: "top", opacity: 0.95, className: "geovision-tooltip" },
+                );
+              }}
+            />
+          )}
+
+          {/* Villages */}
+          {overlays.villages && villagesData && (
+            <GeoJSON
+              key="villages"
+              data={villagesData}
+              style={() => ({
+                color: "#a16207",
+                weight: 1.5,
+                fillColor: "#ca8a04",
+                fillOpacity: 0.28,
+              })}
+              onEachFeature={(feature, layer) => {
+                const props = feature.properties as {
+                  id?: string;
+                  name?: string;
+                  type?: string;
+                  sub_district?: string;
+                  district?: string;
+                  state?: string;
+                  census_2001?: string;
+                };
+                const name = props.name ?? "Village";
+                layer.bindTooltip(name, {
+                  permanent: true,
+                  direction: "center",
+                  opacity: 0.95,
+                  className: "geovision-map-label-static",
+                });
+                layer.bindPopup(
+                  `<div class="geovision-popup__body">
+                    <div class="geovision-popup__title">${name}</div>
+                    <div class="geovision-popup__subtitle">${props.type ?? "Village"} · ${props.id ?? ""}</div>
+                    <dl class="geovision-popup__rows">
+                      ${props.sub_district ? `<div class="geovision-popup__row"><dt>Sub-district</dt><dd>${props.sub_district}</dd></div>` : ""}
+                      ${props.district ? `<div class="geovision-popup__row"><dt>District</dt><dd>${props.district}</dd></div>` : ""}
+                      ${props.state ? `<div class="geovision-popup__row"><dt>State</dt><dd>${props.state}</dd></div>` : ""}
+                      ${props.census_2001 ? `<div class="geovision-popup__row"><dt>Census 2001</dt><dd>${props.census_2001}</dd></div>` : ""}
+                    </dl>
+                  </div>`,
+                  { className: "geovision-popup", minWidth: 220 },
                 );
               }}
             />
@@ -1279,7 +1760,7 @@ export default function MapExplorer() {
 
           {/* Trees (emoji markers) */}
           {overlays.trees && treesData && treesData.trees.length > 0 && (
-            <TreesLayer trees={treesData.trees} />
+            <TreesLayer trees={treesData.trees} interactive={!measure} />
           )}
 
           {/* Ground contours */}
@@ -1291,10 +1772,10 @@ export default function MapExplorer() {
           {/* Flood water / inundation points for selected date */}
           {overlays.flood && floodScene && <FloodLayer scene={floodScene} />}
 
-          {/* Affected houses (within planned road corridor) */}
+          {/* Structures within acquisition boundary (building footprints) */}
           {overlays.affected_houses && affectedHouses && (
             <GeoJSON
-              key="affected-houses"
+              key={`affected-houses-${affectedHouses.source_file ?? "legacy"}-${affectedHouses.count}`}
               data={affectedHouses}
               style={() => ({
                 color: "#ef4444",
@@ -1308,7 +1789,7 @@ export default function MapExplorer() {
                   name?: string;
                   index?: number;
                 };
-                const label = props.name ?? `House ${props.index ?? ""}`;
+                const label = props.name ?? `Building ${props.index ?? ""}`;
                 layer.bindTooltip(
                   `<span class="font-semibold">${label}</span><br/><span class="text-slate-400">${props.id ?? ""}</span>`,
                   { direction: "top", opacity: 0.95, className: "geovision-tooltip" },
@@ -1333,7 +1814,9 @@ export default function MapExplorer() {
                     weight: 2,
                     className: s.hasData ? "geovision-marker" : undefined,
                   }}
-                  eventHandlers={s.hasData ? { click: () => setSelectedBorehole(bh) } : undefined}
+                  eventHandlers={
+                    !measure && s.hasData ? { click: () => setSelectedBorehole(bh) } : undefined
+                  }
                 >
                   <Tooltip direction="top" offset={[0, -8]} opacity={0.95} className="geovision-tooltip">
                     <span className="font-semibold">Soil analysis</span>
@@ -1361,22 +1844,51 @@ export default function MapExplorer() {
               );
             })}
 
-          {/* Measurement */}
-          {measurePts.length > 0 && (
+          {/* Measurement graphics */}
+          {measureTool === "area" && measurePts.length >= 3 && (
+            <Polygon
+              positions={measurePts}
+              pathOptions={{
+                color: "#f43f5e",
+                weight: 2,
+                fillColor: "#f43f5e",
+                fillOpacity: 0.15,
+                dashArray: "6 6",
+              }}
+            />
+          )}
+          {measureTool !== "area" && measurePts.length > 1 && (
+            <Polyline
+              positions={measurePts}
+              pathOptions={{ color: "#f43f5e", weight: 2, dashArray: "6 6" }}
+            />
+          )}
+          {measureTool === "area" && measurePts.length === 2 && (
             <Polyline
               positions={measurePts}
               pathOptions={{ color: "#f43f5e", weight: 2, dashArray: "6 6" }}
             />
           )}
           {measurePts.map((p, i) => (
-            <Circle key={"m" + i} center={p} radius={6} pathOptions={{ color: "#f43f5e", fillOpacity: 1 }} />
+            <CircleMarker
+              key={"m" + i}
+              center={p}
+              radius={4}
+              pathOptions={{
+                color: "#9f1239",
+                fillColor: "#f43f5e",
+                fillOpacity: 1,
+                opacity: 1,
+                weight: 1.5,
+              }}
+            />
           ))}
         </MapContainer>
         )}
 
         {/* top-left controls (layers / elevation) — above Map & Layers panel */}
         <div className="pointer-events-none absolute inset-0 z-[500]">
-          <div className="pointer-events-auto fixed right-4 top-20 z-[600] flex max-w-[calc(100vw-2rem)] flex-col items-end gap-2">
+          <div className="pointer-events-auto fixed right-4 top-20 z-[600] flex max-h-[calc(100vh-6.5rem)] max-w-[calc(100vw-2rem)] flex-col items-end gap-2 overflow-y-auto">
             {mapMode === "2d" && (
               <>
             <WeatherHud
@@ -1392,6 +1904,87 @@ export default function MapExplorer() {
               onBaseChange={setBaseId}
               onOpacityChange={setOpacity}
             />
+            {activeOverlayItems.length > 0 && !alignmentDetails && (
+              <div className="flex w-[min(100vw-2rem,16rem)] max-h-[min(50vh,22rem)] flex-col overflow-hidden rounded-xl border border-white/15 bg-ink-950/95 p-2.5 shadow-2xl backdrop-blur-xl">
+                <div className="mb-2 flex shrink-0 items-center justify-between px-1">
+                  <h3 className="text-xs font-bold uppercase tracking-wide text-slate-300">
+                    Active layers
+                  </h3>
+                  <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] tabular-nums text-slate-400">
+                    {activeOverlayItems.length}
+                  </span>
+                </div>
+                <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
+                  {activeOverlayItems.map((item) => {
+                    const Icon = OVERLAY_ICONS[item.id] ?? LayersIcon;
+                    const open = expandedActiveLayerId === item.id;
+                    const accent = item.color ?? "#94a3b8";
+                    return (
+                      <div
+                        key={item.id}
+                        className={`overflow-hidden rounded-xl border transition ${
+                          open
+                            ? "active-layer-row-open border-sky-400/50 bg-sky-500/10"
+                            : "border-white/10 bg-white/5"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedActiveLayerId((id) =>
+                              id === item.id ? null : item.id,
+                            )
+                          }
+                          className="flex w-full items-center gap-2 px-2.5 py-2 text-left"
+                        >
+                          <span
+                            className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                            style={{ backgroundColor: accent }}
+                          />
+                          <Icon
+                            className="h-3.5 w-3.5 shrink-0"
+                            style={{ color: accent }}
+                          />
+                          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-white">
+                            {item.name}
+                          </span>
+                          <ChevronDown
+                            className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${
+                              open ? "rotate-180" : ""
+                            }`}
+                          />
+                        </button>
+                        {open && (
+                          <div className="border-t border-white/10 px-2 pb-2 pt-2">
+                            {item.id === "alignment" && alignmentSummary ? (
+                              <ProjectAlignmentCard info={alignmentSummary} compact />
+                            ) : item.id === "sb_elevated" && elevatedInfo ? (
+                              <ElevatedViaductCard info={elevatedInfo} compact />
+                            ) : item.id === "sb_service_roads" && serviceRoadSummary ? (
+                              <ServiceRoadCard info={serviceRoadSummary} compact />
+                            ) : item.id === "sb_re_walls" && reWallSummary ? (
+                              <ReWallCard info={reWallSummary} compact />
+                            ) : item.id === "sb_drains" && drainSummary ? (
+                              <DrainCard info={drainSummary} compact />
+                            ) : item.id === "sb_paved_shoulders" && shoulderSummary ? (
+                              <ShoulderCard info={shoulderSummary} compact />
+                            ) : item.id === "structures" && structuresSummary ? (
+                              <StructuresPointsCard info={structuresSummary} compact />
+                            ) : item.id === "trees" && treesSummary ? (
+                              <TreesSummaryCard info={treesSummary} compact />
+                            ) : (
+                              <p className="px-0.5 text-[10px] leading-snug text-slate-400">
+                                {item.description || "Layer is active on the map."}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
               </>
             )}
           </div>
@@ -1482,9 +2075,38 @@ export default function MapExplorer() {
                   {cursor[0].toFixed(5)}, {cursor[1].toFixed(5)}
                 </div>
               )}
-              {measure && (
-                <div className="glass rounded-lg px-3 py-1.5 text-xs text-rose-300">
-                  {measurePts.length < 2 ? "Click to add points" : `Distance: ${measureLength.toFixed(2)} km`}
+              {measureTool && measureResult && (
+                <div className="glass pointer-events-auto max-w-xs rounded-lg px-3 py-1.5 text-xs text-rose-300">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-semibold text-rose-200">
+                      {measureMeta?.label ?? "Measure"} · layers locked
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        disabled={!canMeasureUndo}
+                        onClick={undoMeasure}
+                        title="Undo (Ctrl+Z)"
+                        className="rounded-md p-1 text-rose-200 transition enabled:hover:bg-white/10 disabled:opacity-30"
+                      >
+                        <Undo2 className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canMeasureRedo}
+                        onClick={redoMeasure}
+                        title="Redo (Ctrl+Y)"
+                        className="rounded-md p-1 text-rose-200 transition enabled:hover:bg-white/10 disabled:opacity-30"
+                      >
+                        <Redo2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  {measureResult.lines.map((line, i) => (
+                    <div key={i} className={i === 0 ? "mt-0.5" : "text-rose-300/80"}>
+                      {line}
+                    </div>
+                  ))}
                 </div>
               )}
               {streetViewDragging && (
@@ -1503,16 +2125,85 @@ export default function MapExplorer() {
                 onDrop={handleStreetViewDrop}
                 onDraggingChange={setStreetViewDragging}
               />
-              <ToolBtn
-                active={measure}
-                onClick={() => {
-                  setMeasure((v) => !v);
-                  setMeasurePts([]);
-                }}
-                title="Measure distance"
-              >
-                <Ruler className="h-4 w-4" />
-              </ToolBtn>
+              <div className="relative flex flex-col items-end gap-1">
+                {measureMenuOpen && (
+                  <div className="glass absolute bottom-12 right-0 z-[900] w-52 overflow-hidden rounded-xl border border-white/15 text-left shadow-xl">
+                    <div className="border-b border-white/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                      Measure tools
+                    </div>
+                    {MEASURE_TOOLS.map((t) => {
+                      const Icon =
+                        t.id === "distance"
+                          ? Ruler
+                          : t.id === "area"
+                            ? Pentagon
+                            : t.id === "bearing"
+                              ? Compass
+                              : Mountain;
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => startMeasureTool(t.id)}
+                          className={`flex w-full items-start gap-2 px-3 py-2 text-left text-xs transition hover:bg-white/10 ${
+                            measureTool === t.id ? "bg-rose-500/20 text-rose-200" : "text-slate-200"
+                          }`}
+                        >
+                          <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-400" />
+                          <span>
+                            <span className="font-semibold">{t.label}</span>
+                            <span className="mt-0.5 block text-[10px] text-slate-400">{t.hint}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {measureTool && (
+                      <button
+                        type="button"
+                        onClick={exitMeasure}
+                        className="w-full border-t border-white/10 px-3 py-2 text-left text-xs font-semibold text-slate-300 hover:bg-white/10"
+                      >
+                        Exit measure
+                      </button>
+                    )}
+                  </div>
+                )}
+                <div className="flex flex-col gap-2">
+                  {measure && (
+                    <>
+                      <ToolBtn
+                        onClick={undoMeasure}
+                        active={false}
+                        title={canMeasureUndo ? "Undo last point (Ctrl+Z)" : "Nothing to undo"}
+                        disabled={!canMeasureUndo}
+                      >
+                        <Undo2 className="h-4 w-4" />
+                      </ToolBtn>
+                      <ToolBtn
+                        onClick={redoMeasure}
+                        active={false}
+                        title={canMeasureRedo ? "Redo point (Ctrl+Y)" : "Nothing to redo"}
+                        disabled={!canMeasureRedo}
+                      >
+                        <Redo2 className="h-4 w-4" />
+                      </ToolBtn>
+                    </>
+                  )}
+                  <ToolBtn
+                    active={measure}
+                    onClick={() => {
+                      if (measureTool) {
+                        exitMeasure();
+                        return;
+                      }
+                      setMeasureMenuOpen((v) => !v);
+                    }}
+                    title={measure ? "Exit measure mode" : "Measure tools"}
+                  >
+                    <Ruler className="h-4 w-4" />
+                  </ToolBtn>
+                </div>
+              </div>
                 </>
               )}
               <ToolBtn onClick={() => document.documentElement.requestFullscreen?.()} title="Fullscreen">
@@ -1693,10 +2384,13 @@ export default function MapExplorer() {
                 const items = ANALYSIS_OVERLAYS.filter((o) => o.group === group);
                 if (!items.length) return null;
                 const activeCount = items.filter((o) => overlays[o.id]).length;
+                const groupStyle = OVERLAY_GROUP_STYLES[group];
                 return (
                   <LayerDropdown
                     key={group}
                     title={group}
+                    icon={groupStyle?.icon}
+                    color={groupStyle?.color}
                     open={!!expandedSections[group]}
                     onToggle={() =>
                       setExpandedSections((s) => ({ ...s, [group]: !s[group] }))
@@ -1754,6 +2448,17 @@ export default function MapExplorer() {
                             </div>
                           );
                         })}
+                      </div>
+                    )}
+                    {group === "Alignment & Markers" && overlays.adjacent_roads && adjacentRoads && (
+                      <div className="mt-3 rounded-lg border border-sky-500/20 bg-sky-500/5 p-2.5 text-xs text-slate-400">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-white">Adjacent roads</span>
+                          <span className="tabular-nums text-slate-300">{adjacentRoads.count}</span>
+                        </div>
+                        <p className="mt-1 text-[10px] leading-snug text-slate-500">
+                          Access points along the corridor
+                        </p>
                       </div>
                     )}
                     {group === "Alignment & Markers" &&
@@ -1822,6 +2527,12 @@ export default function MapExplorer() {
                           )}
                         </div>
                       )}
+                    {group === "Schedule-B Corridor" && overlays.sb_elevated && (
+                      <p className="mt-3 text-[10px] leading-snug text-slate-500">
+                        Open <span className="text-sky-300">Elevated Viaduct</span> in the Active layers
+                        panel on the right for length, area, and scour summary.
+                      </p>
+                    )}
                     {group === "Environment" && overlays.lulc && lulcData && lulcData.classes?.length > 0 && (
                       <div className="mt-3 space-y-1.5 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
                         <div className="font-semibold text-white">LULC classes</div>
@@ -1877,11 +2588,23 @@ export default function MapExplorer() {
                           )}
                         </div>
                       )}
+                    {group === "Social Impact" && overlays.villages && villagesData && (
+                      <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
+                        <div className="flex items-center gap-2 font-semibold text-white">
+                          <span className="h-2.5 w-2.5 rounded-sm bg-yellow-600" />
+                          Villages
+                        </div>
+                        <div className="mt-1">
+                          {villagesData.count} village boundaries (Digha–Koilwar)
+                        </div>
+                      </div>
+                    )}
                     {group === "Social Impact" && affectedHouses && affectedHouses.count > 0 && (
                       <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
                         <div className="font-semibold text-white">Structures within Acquisition Boundary</div>
                         <div className="mt-1">
-                          {affectedHouses.count.toLocaleString()} structures inside the acquisition boundary
+                          {affectedHouses.count.toLocaleString()} building footprints inside the land
+                          acquisition boundary
                         </div>
                       </div>
                     )}
@@ -1989,25 +2712,51 @@ function LayerDropdown({
   open,
   onToggle,
   badge,
+  icon: Icon,
+  color,
   children,
 }: {
   title: string;
   open: boolean;
   onToggle: () => void;
   badge?: string;
+  icon?: LucideIcon;
+  color?: string;
   children: React.ReactNode;
 }) {
+  const accent = color ?? "#38e1c6";
   return (
-    <div className="overflow-hidden rounded-xl border border-white/10 bg-white/5">
+    <div
+      className="overflow-hidden rounded-xl border bg-white/5"
+      style={{ borderColor: `${accent}33` }}
+    >
       <button
         type="button"
         onClick={onToggle}
         className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left transition hover:bg-white/5"
+        style={{
+          background: open
+            ? `linear-gradient(90deg, ${accent}22 0%, transparent 70%)`
+            : undefined,
+        }}
       >
-        <span className="text-xs font-semibold text-white">{title}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          {Icon && (
+            <span
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg"
+              style={{ backgroundColor: `${accent}22`, color: accent }}
+            >
+              <Icon className="h-3.5 w-3.5" strokeWidth={2.25} />
+            </span>
+          )}
+          <span className="truncate text-xs font-semibold text-white">{title}</span>
+        </span>
         <span className="flex items-center gap-2">
           {badge && (
-            <span className="max-w-[8rem] truncate rounded-full bg-brand-500/15 px-2 py-0.5 text-[10px] font-medium text-brand-300">
+            <span
+              className="max-w-[8rem] truncate rounded-full px-2 py-0.5 text-[10px] font-medium"
+              style={{ backgroundColor: `${accent}22`, color: accent }}
+            >
               {badge}
             </span>
           )}
@@ -2016,10 +2765,58 @@ function LayerDropdown({
           />
         </span>
       </button>
-      {open && <div className="border-t border-white/10 px-3 py-3">{children}</div>}
+      {open && (
+        <div className="border-t border-white/10 px-3 py-3" style={{ borderColor: `${accent}22` }}>
+          {children}
+        </div>
+      )}
     </div>
   );
 }
+
+const OVERLAY_GROUP_STYLES: Record<string, { icon: LucideIcon; color: string }> = {
+  "Alignment & Markers": { icon: Route, color: "#c026d3" },
+  Utilities: { icon: Zap, color: "#facc15" },
+  "Schedule-B Structures": { icon: Building2, color: "#f59e0b" },
+  "Schedule-B Corridor": { icon: Box, color: "#12c9b0" },
+  Geotechnical: { icon: Mountain, color: "#a855f7" },
+  Environment: { icon: Trees, color: "#22c55e" },
+  "Social Impact": { icon: Users, color: "#ca8a04" },
+  Analysis: { icon: Activity, color: "#0ea5e9" },
+};
+
+const OVERLAY_ICONS: Record<string, LucideIcon> = {
+  alignment: Route,
+  markers: Milestone,
+  toll_plazas: MapPinned,
+  road_categories: GitBranch,
+  road_network: Route,
+  adjacent_roads: MapPinned,
+  railway_lines: TrainFront,
+  railway_stations: TrainFront,
+  railway_platforms: LandPlot,
+  transmission_lines: Zap,
+  substations: Factory,
+  transmission_towers: TowerControl,
+  structures: Building2,
+  sb_elevated: Box,
+  sb_service_roads: Route,
+  sb_re_walls: Fence,
+  sb_drains: Droplets,
+  sb_ramps: GitBranch,
+  sb_paved_shoulders: Route,
+  boreholes: Mountain,
+  water_bodies: Waves,
+  lulc: LandPlot,
+  trees: Trees,
+  contours_1m: MountainSnow,
+  contours_0_5m: Activity,
+  villages: Home,
+  affected_houses: Building2,
+  flood: CloudRain,
+  corridor: Fence,
+  slope: Mountain,
+};
 
 function OverlayCheckboxList({
   items,
@@ -2039,6 +2836,7 @@ function OverlayCheckboxList({
         const locked = lockedIds != null && !lockedIds.has(item.id);
         const forceOn = lockedIds != null && lockedIds.has(item.id);
         const disabled = locked || forceOn;
+        const Icon = OVERLAY_ICONS[item.id] ?? LayersIcon;
         return (
           <label
             key={item.id}
@@ -2055,12 +2853,12 @@ function OverlayCheckboxList({
             />
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2">
-                {item.color && (
-                  <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ background: item.color }}
-                  />
-                )}
+                <span
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-white/5"
+                  style={{ color: item.color ?? "#94a3b8" }}
+                >
+                  <Icon className="h-3.5 w-3.5" strokeWidth={2.25} />
+                </span>
                 <span className="text-xs font-medium text-white">{item.name}</span>
               </span>
               <span className="mt-0.5 block text-[10px] leading-snug text-slate-500">
@@ -2079,18 +2877,24 @@ function ToolBtn({
   onClick,
   active,
   title,
+  disabled,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   active?: boolean;
   title?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       title={title}
+      type="button"
+      disabled={disabled}
       onClick={onClick}
-      className={`grid h-10 w-10 place-items-center rounded-xl border backdrop-blur-xl transition ${
-        active ? "border-rose-400 bg-rose-500/20 text-rose-300" : "border-white/10 bg-ink-900/80 text-white hover:bg-white/10"
+      className={`grid h-10 w-10 place-items-center rounded-xl border backdrop-blur-xl transition disabled:cursor-not-allowed disabled:opacity-35 ${
+        active
+          ? "border-rose-400 bg-rose-500/20 text-rose-300"
+          : "border-white/10 bg-ink-900/80 text-white enabled:hover:bg-white/10"
       }`}
     >
       {children}
@@ -2325,6 +3129,545 @@ function PopupRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function ElevatedViaductCard({
+  info,
+  compact = false,
+}: {
+  info: ElevatedStructureInfo;
+  compact?: boolean;
+}) {
+  const rows: Array<{ label: string; value: string; multiline?: boolean }> = [
+    { label: "Structure Type", value: info.structureType },
+    { label: "Chainage (From)", value: `${info.fromKm.toFixed(3)} km` },
+    { label: "Chainage (To)", value: `${info.toKm.toFixed(3)} km` },
+    {
+      label: "Total Length",
+      value: `${info.totalLengthKm.toFixed(3)} km (${info.totalLengthM.toLocaleString()} m)`,
+    },
+    {
+      label: "LHS Roadway Width",
+      value: info.lhsWidthM != null ? `${info.lhsWidthM.toFixed(2)} m` : "—",
+    },
+    {
+      label: "RHS Roadway Width",
+      value: info.rhsWidthM != null ? `${info.rhsWidthM.toFixed(2)} m` : "—",
+    },
+    { label: "Superstructure Provision in Median", value: info.medianSuperstructure },
+    { label: "Span Arrangement", value: info.spanArrangement, multiline: true },
+    {
+      label: "Minimum Vertical Clearance",
+      value: info.verticalClearanceM != null ? `${info.verticalClearanceM.toFixed(1)} m` : "—",
+    },
+  ];
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-sky-400/25 bg-sky-500/5 p-2"
+          : "rounded-xl border border-sky-400/35 bg-sky-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full shadow-[0_0_10px_rgba(77,232,255,0.45)]"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm shadow-[0_0_12px_rgba(77,232,255,0.55)]"
+        }
+        style={{ backgroundColor: ELEVATED_VIADUCT_COLOR }}
+      />
+      {!compact && (
+        <div className="mb-1 text-[11px] font-semibold leading-snug text-white">Elevated Viaduct</div>
+      )}
+      <div className="text-[9px] font-medium uppercase tracking-wide text-sky-300">
+        Schedule-B structure
+      </div>
+      <div className="mt-2 space-y-1.5 text-[10px] text-slate-400">
+        {rows.map((row) => (
+          <div
+            key={row.label}
+            className={row.multiline ? "flex flex-col gap-0.5" : "flex justify-between gap-2"}
+          >
+            <span className="shrink-0">{row.label}</span>
+            <span
+              className={`tabular-nums text-slate-100 ${
+                row.multiline ? "font-medium leading-snug" : "text-right font-semibold"
+              }`}
+            >
+              {row.value}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ServiceRoadCard({
+  info,
+  compact = false,
+}: {
+  info: ServiceRoadInfo;
+  compact?: boolean;
+}) {
+  const accent = "#3b82f6";
+
+  const Row = ({ label, value }: { label: string; value: string }) => (
+    <div className="flex justify-between gap-2">
+      <span className="text-slate-400">{label}</span>
+      <span className="tabular-nums font-semibold text-slate-100">{value}</span>
+    </div>
+  );
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-blue-400/25 bg-blue-500/5 p-2"
+          : "rounded-xl border border-blue-400/35 bg-blue-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      {!compact && (
+        <div className="mb-1 text-[11px] font-semibold leading-snug text-white">Service Roads</div>
+      )}
+      <div className="space-y-1.5 text-[10px]">
+        <Row label="Total Sections" value={String(info.totalSections)} />
+        <Row label="Total Length" value={`${info.overallLengthKm.toFixed(3)} km`} />
+
+        <div className="border-t border-white/10 pt-1.5">
+          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-blue-300">
+            VUP Section
+          </div>
+          <div className="space-y-1 pl-1.5">
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Sections</span>
+              <span className="tabular-nums font-semibold text-slate-100">{info.vupSections}</span>
+            </div>
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Total Length</span>
+              <span className="tabular-nums font-semibold text-slate-100">
+                {info.vupLengthKm.toFixed(3)} km
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-white/10 pt-1.5">
+          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-blue-300">
+            Main Carriageway
+          </div>
+          <div className="space-y-1 pl-1.5">
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Sections</span>
+              <span className="tabular-nums font-semibold text-slate-100">
+                {info.mainCarriagewaySections}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Total Length</span>
+              <span className="tabular-nums font-semibold text-slate-100">
+                {info.mainCarriagewayLengthKm.toFixed(3)} km
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReWallCard({
+  info,
+  compact = false,
+}: {
+  info: ReWallInfo;
+  compact?: boolean;
+}) {
+  const accent = "#f97316";
+
+  const Row = ({ label, value }: { label: string; value: string }) => (
+    <div className="flex justify-between gap-2">
+      <span className="text-slate-400">{label}</span>
+      <span className="tabular-nums font-semibold text-slate-100">{value}</span>
+    </div>
+  );
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-orange-400/25 bg-orange-500/5 p-2"
+          : "rounded-xl border border-orange-400/35 bg-orange-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="space-y-1.5 text-[10px]">
+        <Row label="Total Sections" value={String(info.totalSections)} />
+        <Row label="Total Length" value={`${info.totalLengthKm.toFixed(3)} km`} />
+
+        <div className="border-t border-white/10 pt-1.5">
+          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-orange-300">
+            VUP Approaches
+          </div>
+          <div className="space-y-1 pl-1.5">
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Sections</span>
+              <span className="tabular-nums font-semibold text-slate-100">{info.vupSections}</span>
+            </div>
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Total Length</span>
+              <span className="tabular-nums font-semibold text-slate-100">
+                {info.vupLengthKm.toFixed(3)} km
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-white/10 pt-1.5">
+          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-orange-300">
+            Loop / Ramp
+          </div>
+          <div className="space-y-1 pl-1.5">
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Sections</span>
+              <span className="tabular-nums font-semibold text-slate-100">
+                {info.loopRampSections}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Total Length</span>
+              <span className="tabular-nums font-semibold text-slate-100">
+                {info.loopRampLengthKm.toFixed(3)} km
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DrainCard({
+  info,
+  compact = false,
+}: {
+  info: DrainInfo;
+  compact?: boolean;
+}) {
+  const accent = "#06b6d4";
+
+  const rows: Array<{ label: string; value: string; multiline?: boolean }> = [
+    { label: "Structure Type", value: info.structureType },
+    { label: "Drain Category", value: info.drainCategory, multiline: true },
+    {
+      label: "Total Sections",
+      value: `${info.totalSections} (${info.rccDrainSections} RCC Drains + ${info.rccDrainCumFootpathSections} RCC Drain cum Footpath)`,
+      multiline: true,
+    },
+    { label: "Total Drain Length", value: `${info.totalLengthKm.toFixed(3)} km` },
+    { label: "Chainage", value: "Design Chainage (From–To)" },
+    { label: "Side", value: "LHS / RHS / Both" },
+  ];
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-cyan-400/25 bg-cyan-500/5 p-2"
+          : "rounded-xl border border-cyan-400/35 bg-cyan-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="space-y-1.5 text-[10px] text-slate-400">
+        {rows.map((row) => (
+          <div
+            key={row.label}
+            className={row.multiline ? "flex flex-col gap-0.5" : "flex justify-between gap-2"}
+          >
+            <span className="shrink-0 leading-snug">{row.label}</span>
+            <span
+              className={`text-slate-100 ${
+                row.multiline ? "font-medium leading-snug" : "text-right font-semibold tabular-nums"
+              }`}
+            >
+              {row.value}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ShoulderCard({
+  info,
+  compact = false,
+}: {
+  info: ShoulderInfo;
+  compact?: boolean;
+}) {
+  const accent = "#94a3b8";
+
+  const Row = ({ label, value }: { label: string; value: string }) => (
+    <div className="flex justify-between gap-2">
+      <span className="text-slate-400">{label}</span>
+      <span className="tabular-nums font-semibold text-slate-100">{value}</span>
+    </div>
+  );
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-slate-400/25 bg-slate-500/5 p-2"
+          : "rounded-xl border border-slate-400/35 bg-slate-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="space-y-1.5 text-[10px]">
+        <Row label="Total Sections" value={String(info.totalSections)} />
+        <Row label="Total Length" value={`${info.totalLengthKm.toFixed(3)} km`} />
+
+        <div className="border-t border-white/10 pt-1.5">
+          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-300">
+            Paved Shoulder
+          </div>
+          <div className="space-y-1 pl-1.5">
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Sections</span>
+              <span className="tabular-nums font-semibold text-slate-100">{info.pavedSections}</span>
+            </div>
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Total Length</span>
+              <span className="tabular-nums font-semibold text-slate-100">
+                {info.pavedLengthKm.toFixed(3)} km
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-white/10 pt-1.5">
+          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-300">
+            Earthen Shoulder
+          </div>
+          <div className="space-y-1 pl-1.5">
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Sections</span>
+              <span className="tabular-nums font-semibold text-slate-100">
+                {info.earthenSections}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2 text-slate-400">
+              <span>• Total Length</span>
+              <span className="tabular-nums font-semibold text-slate-100">
+                {info.earthenLengthKm.toFixed(3)} km
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TreesSummaryCard({
+  info,
+  compact = false,
+}: {
+  info: TreesSummaryInfo;
+  compact?: boolean;
+}) {
+  const accent = "#22c55e";
+  const rows: Array<{ label: string; value: string }> = [
+    { label: "Total Trees", value: info.totalTrees.toLocaleString() },
+    { label: "Corridor Zones", value: info.corridorZones.toLocaleString() },
+    {
+      label: "Total Canopy Area",
+      value: `${info.totalCanopyAreaM2.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })} m²`,
+    },
+    { label: "Average Tree Height", value: `${info.avgHeightM.toFixed(2)} m` },
+    { label: "Tallest Tree", value: `${info.tallestM.toFixed(2)} m` },
+    { label: "Shortest Tree", value: `${info.shortestM.toFixed(2)} m` },
+    {
+      label: "Largest Canopy",
+      value: `${info.largestCanopyM2.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })} m²`,
+    },
+  ];
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-emerald-400/25 bg-emerald-500/5 p-2"
+          : "rounded-xl border border-emerald-400/35 bg-emerald-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-emerald-300">
+        Within 50 m corridor
+      </div>
+      <div className="space-y-1 text-[10px]">
+        {rows.map((row) => (
+          <div key={row.label} className="flex justify-between gap-2 text-slate-400">
+            <span className="shrink-0">• {row.label}</span>
+            <span className="text-right font-semibold tabular-nums text-slate-100">
+              {row.value}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StructuresPointsCard({
+  info,
+  compact = false,
+}: {
+  info: StructuresPointsInfo;
+  compact?: boolean;
+}) {
+  const accent = "#f59e0b";
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-amber-400/25 bg-amber-500/5 p-2"
+          : "rounded-xl border border-amber-400/35 bg-amber-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-amber-300">
+        Underpasses, interchanges, culverts, elevated
+      </div>
+      <div className="space-y-1.5 text-[10px]">
+        <div className="flex justify-between gap-2">
+          <span className="text-slate-400">Total Structures</span>
+          <span className="tabular-nums font-semibold text-slate-100">{info.total}</span>
+        </div>
+        <div className="border-t border-white/10 pt-1.5 space-y-1">
+          {info.byType.map((row) => (
+            <div key={row.type} className="flex items-center justify-between gap-2 text-slate-400">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: row.color }}
+                />
+                <span className="truncate">• {row.label}</span>
+              </span>
+              <span className="tabular-nums font-semibold text-slate-100">{row.count}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectAlignmentCard({
+  info,
+  compact = false,
+}: {
+  info: ProjectAlignmentInfo;
+  compact?: boolean;
+}) {
+  const accent = "#c026d3";
+  const rows: Array<{ label: string; value: string }> = [
+    { label: "Total Length", value: `${info.totalLengthKm.toFixed(3)} km` },
+    { label: "Existing Length", value: `${info.existingLengthKm.toFixed(3)} km` },
+    { label: "Number of Lanes", value: String(info.numberOfLanes) },
+    { label: "Alignment Type", value: info.alignmentType },
+    { label: "Elevated Section", value: `${info.elevatedSectionKm.toFixed(3)} km` },
+    { label: "At-grade Section", value: `${info.atGradeSectionKm.toFixed(3)} km` },
+    { label: "Median Width", value: `${info.medianWidthM.toFixed(2)} m` },
+    { label: "Shoulder Width", value: info.shoulderWidth },
+    {
+      label: "Design Speed",
+      value: `${info.designSpeedKmh} km/h${info.designSpeedNote}`,
+    },
+    { label: "Service Roads", value: `${info.serviceRoadsKm.toFixed(3)} km` },
+    { label: "Start Chainage", value: `CH ${formatChainage(info.startChainageKm)}` },
+    { label: "End Chainage", value: `CH ${formatChainage(info.endChainageKm)}` },
+  ];
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-fuchsia-400/25 bg-fuchsia-500/5 p-2"
+          : "rounded-xl border border-fuchsia-400/35 bg-fuchsia-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="space-y-1 text-[10px]">
+        {rows.map((row) => (
+          <div key={row.label} className="flex justify-between gap-2 text-slate-400">
+            <span className="shrink-0">• {row.label}</span>
+            <span className="text-right font-semibold tabular-nums text-slate-100">{row.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DetailCard({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="rounded-lg border border-white/10 bg-white/5 p-3">
@@ -2435,6 +3778,19 @@ function MapResizeOnPanel({ active }: { active: boolean }) {
   return null;
 }
 
+function useLayerBlinkPulse(active: boolean): boolean {
+  const [bright, setBright] = useState(true);
+  useEffect(() => {
+    if (!active) {
+      setBright(true);
+      return;
+    }
+    const id = window.setInterval(() => setBright((v) => !v), 400);
+    return () => window.clearInterval(id);
+  }, [active]);
+  return bright;
+}
+
 function SbLineLayer({
   features,
   color,
@@ -2442,6 +3798,7 @@ function SbLineLayer({
   opacity,
   dash,
   unit,
+  blink = false,
 }: {
   features: SbLineFeature[];
   color: string;
@@ -2449,20 +3806,32 @@ function SbLineLayer({
   opacity: number;
   dash?: string;
   unit: string;
+  blink?: boolean;
 }) {
+  const svgRenderer = useMemo(() => L.svg({ padding: 0.5 }), []);
   return (
     <>
       {features.map((f, i) => (
         <Polyline
-          key={`${unit}-${i}`}
+          key={`${unit}-${i}-${blink ? "blink" : "steady"}`}
           positions={f.positions}
-          pathOptions={{ color, weight, opacity, dashArray: dash, lineCap: "round", lineJoin: "round" }}
+          pathOptions={{
+            color: f.color ?? color,
+            weight: blink ? weight + 2 : weight,
+            opacity,
+            dashArray: dash,
+            lineCap: "round",
+            lineJoin: "round",
+            className: blink ? "active-layer-blink" : undefined,
+          }}
+          {...(blink ? { renderer: svgRenderer } : {})}
         >
           <Tooltip direction="top" opacity={0.95} className="geovision-tooltip" sticky>
             <span className="font-semibold">{f.label}</span>
             <br />
             <span className="text-slate-400">
               {unit} · Ch {f.from}–{f.to} km
+              {f.details.hydraulic_zone != null ? ` · ${String(f.details.hydraulic_zone)}` : ""}
             </span>
           </Tooltip>
           <Popup className="geovision-popup" minWidth={240} maxWidth={340}>
@@ -2503,10 +3872,12 @@ function ElevationProfileMarkers({
   points,
   focus,
   onPointClick,
+  interactive = true,
 }: {
   points: Array<ElevationPoint & { latitude: number; longitude: number }>;
   focus: { lat: number; lon: number; chainage: number; elevation: number } | null;
   onPointClick: (point: ElevationPoint) => void;
+  interactive?: boolean;
 }) {
   const branchColor = (branch?: string) => {
     if (branch === "lhs") return "#3b82f6";
@@ -2566,9 +3937,11 @@ function ElevationProfileMarkers({
               fillColor: isFocused ? color : color,
               fillOpacity: isFocused ? 1 : 0.9,
               weight: isFocused ? 2 : 1,
+              interactive,
             }}
-            eventHandlers={{ click: () => onPointClick(p) }}
+            eventHandlers={interactive ? { click: () => onPointClick(p) } : undefined}
           >
+            {interactive && (
             <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
               <span>
                 Ch {ch.toFixed(2)} km
@@ -2594,6 +3967,7 @@ function ElevationProfileMarkers({
                 )}
               </span>
             </Tooltip>
+            )}
           </CircleMarker>
         );
       })}
@@ -2764,15 +4138,52 @@ function MapInstanceCapture({ onReady }: { onReady: (map: L.Map) => void }) {
   return null;
 }
 
+function MeasureModeEffects({ active }: { active: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    const el = map.getContainer();
+    if (active) {
+      el.classList.add("measure-mode");
+      // Leaflet throws if nothing is open — ignore.
+      try {
+        map.closePopup();
+      } catch {
+        /* empty */
+      }
+      try {
+        map.closeTooltip();
+      } catch {
+        /* empty */
+      }
+      el.style.cursor = "crosshair";
+    } else {
+      el.classList.remove("measure-mode");
+      el.style.cursor = "";
+    }
+    return () => {
+      el.classList.remove("measure-mode");
+      el.style.cursor = "";
+    };
+  }, [map, active]);
+  return null;
+}
+
 function MeasureHandler({
-  pts,
-  setPts,
+  maxPts,
+  commitPts,
 }: {
-  pts: [number, number][];
-  setPts: (p: [number, number][]) => void;
+  maxPts: number | null;
+  commitPts: (next: LatLon[] | ((prev: LatLon[]) => LatLon[])) => void;
 }) {
   useMapEvents({
-    click: (e) => setPts([...pts, [e.latlng.lat, e.latlng.lng]]),
+    click: (e) => {
+      L.DomEvent.stopPropagation(e);
+      const next: LatLon = [e.latlng.lat, e.latlng.lng];
+      commitPts((prev) => {
+        if (maxPts != null && prev.length >= maxPts) return [next];
+        return [...prev, next];
+      });
+    },
   });
   return null;
 }
@@ -2805,22 +4216,6 @@ function offsetPath(path: [number, number][], offset: number): [number, number][
     out.push([path[i][0] + ny * offset, path[i][1] + nx * offset]);
   }
   return out;
-}
-
-function haversinePath(pts: [number, number][]): number {
-  let total = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const [lat1, lon1] = pts[i - 1];
-    const [lat2, lon2] = pts[i];
-    const R = 6371;
-    const dLat = ((lat2 - lat1) * Math.PI) / 180;
-    const dLon = ((lon2 - lon1) * Math.PI) / 180;
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
-    total += 2 * R * Math.asin(Math.sqrt(a));
-  }
-  return total;
 }
 
 // Ensure default marker assets resolve (in case markers are added later).

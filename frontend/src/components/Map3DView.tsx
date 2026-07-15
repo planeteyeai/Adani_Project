@@ -83,6 +83,7 @@ type Props = {
   substations: SubstationsData | null;
   transmissionTowers: TransmissionTowersData | null;
   waterBodies: WaterBodiesData | null;
+  waterways: WaterBodiesData | null;
   lulcData: LulcData | null;
   treesData: TreesData | null;
   affectedHouses: AffectedHousesData | null;
@@ -490,6 +491,7 @@ export default function Map3DView(props: Props) {
     substations,
     transmissionTowers,
     waterBodies,
+    waterways,
     lulcData,
     treesData,
     affectedHouses,
@@ -602,6 +604,7 @@ export default function Map3DView(props: Props) {
     substations,
     transmissionTowers,
     waterBodies,
+    waterways,
     lulcData,
     treesData,
     affectedHouses,
@@ -792,7 +795,7 @@ async function syncAll(viewer: Viewer, p: Props, hasTerrain: boolean) {
 
   // Schedule-B corridor lines
   const sbMap: Array<[string, keyof Props["sbLines"], string]> = [
-    ["3d-sb-elev", "elevated", "#12c9b0"],
+    ["3d-sb-elev", "elevated", "#4de8ff"], // ELEVATED_VIADUCT_COLOR
     ["3d-sb-ramp", "ramps", "#eab308"],
     ["3d-sb-srv", "service_roads", "#3b82f6"],
     ["3d-sb-rew", "re_walls", "#f97316"],
@@ -835,9 +838,15 @@ async function syncAll(viewer: Viewer, p: Props, hasTerrain: boolean) {
   // Environment
   if (o.water_bodies && p.waterBodies) {
     await upsert(viewer, "3d-wb", p.waterBodies, (ds) =>
-      stylePolygons(ds, { fill: "#0ea5e9", stroke: "#0284c7", fillAlpha: 0.45 }),
+      stylePolygons(ds, { fill: "#38bdf8", stroke: "#0369a1", fillAlpha: 0.35 }),
     );
   } else await removeDs(viewer, "3d-wb");
+
+  if (o.water_bodies && p.waterways) {
+    await upsert(viewer, "3d-ww", p.waterways, (ds) =>
+      stylePolygons(ds, { fill: "#0ea5e9", stroke: "#075985", fillAlpha: 0.45 }),
+    );
+  } else await removeDs(viewer, "3d-ww");
 
   if (o.lulc && p.lulcData) {
     await upsert(viewer, "3d-lulc", p.lulcData, (ds) =>

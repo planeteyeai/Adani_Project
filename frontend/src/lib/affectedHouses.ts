@@ -5,6 +5,7 @@ export type AffectedHouseFeature = {
     index: number;
     name: string;
     folder?: string | null;
+    source_id?: string | null;
   };
   geometry: {
     type: "Polygon";
@@ -18,6 +19,8 @@ export type AffectedHousesData = {
   count: number;
   type: "FeatureCollection";
   features: AffectedHouseFeature[];
+  source_file?: string;
+  source_folder?: string | null;
 };
 
 let cache: AffectedHousesData | null = null;
