@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ArrowRight, Play, Sparkles, CheckCircle2 } from "lucide-react";
+import { ArrowRight, Sparkles, CheckCircle2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Icon } from "../components/Icon";
 import { FEATURES, STATS } from "../data/content";
@@ -71,12 +71,6 @@ function Hero() {
             <Link to="/explorer" className="btn-primary">
               Start Project <ArrowRight className="h-4 w-4" />
             </Link>
-            <Link to="/dashboard" className="btn-ghost">
-              <Play className="h-4 w-4" /> View Demo
-            </Link>
-            <a href="#features" className="btn-ghost">
-              Request Proposal
-            </a>
           </motion.div>
 
           <motion.div

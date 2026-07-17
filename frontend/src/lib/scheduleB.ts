@@ -417,6 +417,9 @@ export type ProjectAlignmentInfo = {
   serviceRoadsKm: number;
   startChainageKm: number;
   endChainageKm: number;
+  areaM2: number;
+  areaKm2: number;
+  areaAcres: number;
 };
 
 /** Project centreline / design alignment summary for Active layers. */
@@ -441,6 +444,9 @@ export function projectAlignmentInfo(sb: ScheduleB | null): ProjectAlignmentInfo
     serviceRoadsKm: roads?.overallLengthKm ?? 34.088,
     startChainageKm: 0,
     endChainageKm: 35.215,
+    areaM2: 1_930_918.761,
+    areaKm2: 1.9309,
+    areaAcres: 477.13,
   };
 }
 

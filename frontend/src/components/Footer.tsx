@@ -1,4 +1,3 @@
-import { Globe2 } from "lucide-react";
 import { Link } from "react-router-dom";
 
 export default function Footer() {
@@ -7,11 +6,13 @@ export default function Footer() {
       <div className="mx-auto grid max-w-7xl gap-10 px-5 py-14 md:grid-cols-3">
         <div className="md:col-span-1">
           <div className="flex items-center gap-2.5">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand-500/15 ring-1 ring-brand-500/40">
-              <Globe2 className="h-5 w-5 text-brand-400" />
-            </span>
-            <span className="text-lg font-extrabold">
-              Geo<span className="text-brand-400">Vision</span>
+            <img
+              src="/planeteye-logo.png"
+              alt="PlanetEye INFRA-AI"
+              className="h-10 w-10 rounded-full object-contain"
+            />
+            <span className="text-xl font-extrabold tracking-wider">
+              Planet<span className="text-brand-400">Eye</span>
             </span>
           </div>
           <p className="mt-4 max-w-xs text-sm text-slate-400">
@@ -39,7 +40,7 @@ export default function Footer() {
         />
       </div>
       <div className="border-t border-white/10 py-6 text-center text-xs text-slate-500">
-        © {new Date().getFullYear()} GeoVision. Built for EPC contractors, consultants & government
+        © {new Date().getFullYear()} PlanetEye. Built for EPC contractors, consultants & government
         agencies. Demo data: Digha–Koilwar Ganga Path, Bihar.
       </div>
     </footer>

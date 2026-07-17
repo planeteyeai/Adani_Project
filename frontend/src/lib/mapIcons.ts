@@ -117,6 +117,60 @@ export function roadCategoryStyle(name: string): RoadCategoryStyle {
   return { label: name, shortLabel: "RD", color: "#94a3b8", gradient: ["#cbd5e1", "#94a3b8"] };
 }
 
+export type RoadCategoryDetail = {
+  category: string;
+  structureType: string;
+  tcs: string;
+  stretch: string;
+  color: string;
+};
+
+/** Design / Schedule-B road category inventory for Active layers. */
+export const ROAD_CATEGORY_DETAILS: RoadCategoryDetail[] = [
+  {
+    category: "6-Lane Divided (Elevated)",
+    structureType: "Elevated Main Carriageway",
+    tcs: "TCS-1",
+    stretch: "CH 0.000–17.488",
+    color: "#3b82f6",
+  },
+  {
+    category: "6-Lane Grade-Separated",
+    structureType: "VUP / Grade-Separated Structure",
+    tcs: "TCS-5 / TCS-6",
+    stretch: "VUP approaches",
+    color: "#2563eb",
+  },
+  {
+    category: "4-Lane Divided",
+    structureType: "Main Carriageway",
+    tcs: "TCS-3 / TCS-4",
+    stretch: "CH 17.488–35.215",
+    color: "#22c55e",
+  },
+  {
+    category: "4-Lane Loop/Ramp",
+    structureType: "Loop/Ramp with RE Wall",
+    tcs: "TCS-8",
+    stretch: "Trumpet at CH 34.532",
+    color: "#14b8a6",
+  },
+  {
+    category: "2-Lane Loop/Ramp",
+    structureType: "Interchange Ramp",
+    tcs: "TCS-2",
+    stretch: "Interchanges",
+    color: "#84cc16",
+  },
+  {
+    category: "2-Lane Loop/Ramp with Retaining Wall",
+    structureType: "Ramp",
+    tcs: "TCS-7",
+    stretch: "Interchanges",
+    color: "#65a30d",
+  },
+];
+
 const roadCategoryIconCache = new Map<string, L.DivIcon>();
 
 export function createRoadCategoryIcon(name: string): L.DivIcon {

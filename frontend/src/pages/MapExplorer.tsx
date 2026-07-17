@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   Circle,
   CircleMarker,
@@ -34,6 +35,7 @@ import {
   Fence,
   GitBranch,
   Home,
+  Info,
   LandPlot,
   Layers as LayersIcon,
   Box,
@@ -60,7 +62,6 @@ import type { LucideIcon } from "lucide-react";
 import ElevationGraphModal, { type ElevationPoint, type ElevationScrubSample } from "../components/ElevationGraphModal";
 import BoreholeCard from "../components/BoreholeCard";
 import WeatherForecastModal from "../components/WeatherForecastModal";
-import WeatherHud from "../components/WeatherHud";
 import BaseMapSwitcher from "../components/BaseMapSwitcher";
 import StreetViewModal from "../components/StreetViewModal";
 import StreetViewPegman from "../components/StreetViewPegman";
@@ -68,8 +69,10 @@ import Map3DView from "../components/Map3DView";
 import { STREET_VIEW_COVERAGE } from "../lib/streetView";
 import { ANALYSIS_OVERLAYS, ANALYSIS_OVERLAY_GROUPS, BASEMAPS, type AnalysisOverlay } from "../lib/basemaps";
 import { fetchProject } from "../lib/api";
+import { useTopBarWeather } from "../lib/topBarWeather";
 import { createChainageResolver, sampleChainageRange } from "../lib/chainage";
 import { elevationMapSample, fetchElevationProfile } from "../lib/elevation";
+import { fetchDesignHfl, type DesignHflPoint } from "../lib/designHfl";
 import {
   MEASURE_TOOLS,
   bearingDeg,
@@ -85,10 +88,19 @@ import {
   fetchElevatedScour,
   type ElevatedScourData,
 } from "../lib/elevatedScour";
+import {
+  fetchGroundScour,
+  groundScourDepthColor,
+  groundScourZoneColor,
+  summarizeGroundScour,
+  type GroundScourData,
+  type GroundScourPoint,
+  type GroundScourSummary,
+} from "../lib/groundScour";
 import { fetchAffectedHouses, type AffectedHousesData } from "../lib/affectedHouses";
 import { fetchWaterBodies, fetchWaterways, type WaterBodiesData } from "../lib/waterBodies";
 import { fetchVillages, type VillagesData } from "../lib/villages";
-import { fetchLulc, type LulcData } from "../lib/lulc";
+import { fetchLulc, lulcSummaryInfo, type LulcData, type LulcSummaryInfo } from "../lib/lulc";
 import { fetchContours05m, fetchContours1m, type ContoursData } from "../lib/contours";
 import { fetchAdjacentRoads, type AdjacentRoadsData } from "../lib/adjacentRoads";
 import { fetchRoadNetwork, highwayStyle, type RoadNetworkData } from "../lib/roadNetwork";
@@ -96,11 +108,17 @@ import {
   fetchRailwayLines,
   fetchRailwayPlatforms,
   fetchRailwayStations,
+  railwayLinesSummary,
+  railwayPlatformsSummary,
+  railwayStationsSummary,
   RAILWAY_LINE_STYLE,
   RAILWAY_PLATFORM_STYLE,
   type RailwayLinesData,
+  type RailwayLinesSummary,
   type RailwayPlatformsData,
+  type RailwayPlatformsSummary,
   type RailwayStationsData,
+  type RailwayStationsSummary,
 } from "../lib/railway";
 import {
   fetchSubstations,
@@ -127,6 +145,8 @@ import {
   createTollPlazaIcon,
   isRoadCategoryName,
   roadCategoryStyle,
+  ROAD_CATEGORY_DETAILS,
+  type RoadCategoryDetail,
   structureIconFile,
   structureIconUrl,
 } from "../lib/mapIcons";
@@ -171,24 +191,6 @@ type SbLineFeature = {
   color?: string;
 };
 
-type AlignmentDetails = {
-  /** summary = layer toggled on; point = clicked a segment on the map */
-  mode: "summary" | "point";
-  name: string;
-  folder?: string;
-  lengthKm: number;
-  stroke: string;
-  isCentreline: boolean;
-  segmentCount: number;
-  totalLengthKm: number;
-  lat?: number;
-  lon?: number;
-  chainageKm: number | null;
-  elevation: number | null;
-  tcs: { fromKm: number; toKm: number; tcs: string | null; description: string | null } | null;
-  nearestStructure: { label: string; type: string; chainageKm: number } | null;
-};
-
 const DEFAULT_OVERLAYS: Record<string, boolean> = {
   alignment: true,
   markers: false,
@@ -218,6 +220,7 @@ const DEFAULT_OVERLAYS: Record<string, boolean> = {
   villages: false,
   affected_houses: false,
   flood: false,
+  ground_scour: false,
   corridor: false,
   slope: false,
 };
@@ -240,10 +243,15 @@ export default function MapExplorer() {
   const [opacity, setOpacity] = useState(0.7);
   const [showElevation, setShowElevation] = useState(false);
   const [showWeather, setShowWeather] = useState(false);
+  const topBarWeather = useTopBarWeather();
   const [elevationPoints, setElevationPoints] = useState<ElevationPoint[]>([]);
+  const [designHflPoints, setDesignHflPoints] = useState<DesignHflPoint[]>([]);
   const [geotech, setGeotech] = useState<GeotechData | null>(null);
   const [affectedHouses, setAffectedHouses] = useState<AffectedHousesData | null>(null);
   const [elevatedScour, setElevatedScour] = useState<ElevatedScourData | null>(null);
+  const [groundScour, setGroundScour] = useState<GroundScourData | null>(null);
+  const [hoveredGroundScour, setHoveredGroundScour] = useState<GroundScourPoint | null>(null);
+  const [groundScourCursor, setGroundScourCursor] = useState<{ x: number; y: number } | null>(null);
   const [waterBodies, setWaterBodies] = useState<WaterBodiesData | null>(null);
   const [waterways, setWaterways] = useState<WaterBodiesData | null>(null);
   const [villagesData, setVillagesData] = useState<VillagesData | null>(null);
@@ -271,9 +279,11 @@ export default function MapExplorer() {
     }
     return sections;
   });
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [mapControlsOpen, setMapControlsOpen] = useState(true);
+  const [projectOverviewOpen, setProjectOverviewOpen] = useState(true);
   const [baseMapOpen, setBaseMapOpen] = useState(false);
-  const [alignmentDetails, setAlignmentDetails] = useState<AlignmentDetails | null>(null);
+  const [activeLayersOpen, setActiveLayersOpen] = useState(true);
+  const layersSectionRef = useRef<HTMLDivElement>(null);
   /** Which active-layer accordion is open on the right panel (`null` = all collapsed). */
   const [expandedActiveLayerId, setExpandedActiveLayerId] = useState<string | null>(null);
   const [mapMode, setMapMode] = useState<"2d" | "3d">("2d");
@@ -311,9 +321,11 @@ export default function MapExplorer() {
   useEffect(() => {
     fetchProject("demo").then(setProject);
     fetchElevationProfile().then(setElevationPoints);
+    fetchDesignHfl().then(setDesignHflPoints);
     fetchGeotech().then(setGeotech);
     fetchAffectedHouses().then(setAffectedHouses);
     fetchElevatedScour().then(setElevatedScour);
+    fetchGroundScour().then(setGroundScour);
     fetchWaterBodies().then(setWaterBodies);
     fetchWaterways().then(setWaterways);
     fetchVillages().then(setVillagesData);
@@ -334,6 +346,13 @@ export default function MapExplorer() {
       if (data?.dates?.length) setFloodDate(data.dates[0]);
     });
   }, []);
+
+  useEffect(() => {
+    if (!overlays.ground_scour) {
+      setHoveredGroundScour(null);
+      setGroundScourCursor(null);
+    }
+  }, [overlays.ground_scour]);
 
   // Opening the flood overlay also opens the time-series panel
   useEffect(() => {
@@ -482,23 +501,79 @@ export default function MapExplorer() {
     [points]
   );
 
-  /** One marker per station label (KMZ often duplicates LHS/RHS points). */
-  const uniqueChainagePoints = useMemo(() => {
-    const byName = new Map<string, MapPoint>();
-    for (const p of chainagePoints) {
-      if (!byName.has(p.name)) byName.set(p.name, p);
-    }
-    return [...byName.values()].sort((a, b) => {
-      const [ak, am] = a.name.split("+").map(Number);
-      const [bk, bm] = b.name.split("+").map(Number);
-      return ak - bk || am - bm;
-    });
-  }, [chainagePoints]);
+  /** All chainage markers (including LHS/RHS duplicates), sorted by station. */
+  const sortedChainagePoints = useMemo(
+    () =>
+      [...chainagePoints].sort((a, b) => {
+        const [ak, am] = a.name.split("+").map(Number);
+        const [bk, bm] = b.name.split("+").map(Number);
+        return ak - bk || am - bm;
+      }),
+    [chainagePoints],
+  );
+
+  const chainagePointsSummary = useMemo(() => {
+    if (!sortedChainagePoints.length) return null;
+    const first = sortedChainagePoints[0];
+    const last = sortedChainagePoints[sortedChainagePoints.length - 1];
+    return {
+      totalCount: sortedChainagePoints.length,
+      startChainage: first.name,
+      endChainage: last.name,
+    };
+  }, [sortedChainagePoints]);
 
   const tollPlazaPoints = useMemo(
     () => points.filter((p) => /toll\s*plaza/i.test(p.name)),
     [points]
   );
+
+  const tollPlazaSummary = useMemo(() => {
+    if (!tollPlazaPoints.length) return null;
+
+    const stations = sortedChainagePoints;
+
+    const items = tollPlazaPoints.map((toll, index) => {
+      let nearestLabel: string | null = null;
+      let nearestKm: number | null = null;
+      let distM: number | null = null;
+
+      if (stations.length) {
+        let best = Infinity;
+        for (const s of stations) {
+          const d = haversineKm(toll.lat, toll.lon, s.lat, s.lon) * 1000;
+          if (d < best) {
+            best = d;
+            nearestLabel = s.name;
+            const [ak, am] = s.name.split("+").map(Number);
+            nearestKm = ak + am / 1000;
+            distM = d;
+          }
+        }
+      }
+
+      return {
+        id: `toll-${index + 1}`,
+        index,
+        label: toll.name !== "TOLL PLAZA" ? toll.name : `Toll Plaza ${index + 1}`,
+        lat: toll.lat,
+        lon: toll.lon,
+        nearestChainage: nearestLabel,
+        nearestChainageKm: nearestKm,
+        distM,
+      };
+    });
+
+    const byIndex = items.slice();
+    items.sort((a, b) => {
+      if (a.nearestChainageKm == null && b.nearestChainageKm == null) return 0;
+      if (a.nearestChainageKm == null) return 1;
+      if (b.nearestChainageKm == null) return -1;
+      return a.nearestChainageKm - b.nearestChainageKm;
+    });
+
+    return { totalCount: items.length, items, byIndex };
+  }, [tollPlazaPoints, sortedChainagePoints]);
 
   const roadCategoryPoints = useMemo(
     () => points.filter((p) => isRoadCategoryName(p.name)),
@@ -635,10 +710,76 @@ export default function MapExplorer() {
     [scheduleB],
   );
 
+  const overlayGroupBadges = useMemo(() => {
+    const badges: Record<string, string> = {};
+    if (alignmentSummary) {
+      badges["Alignment & Markers"] = `${alignmentSummary.totalLengthKm.toFixed(1)} km`;
+    }
+    const utilityCount =
+      (transmissionLines?.count ?? 0) +
+      (substations?.count ?? 0) +
+      (transmissionTowers?.count ?? 0);
+    if (utilityCount) badges.Utilities = String(utilityCount);
+    if (structuresSummary?.total) {
+      badges["Schedule-B Structures"] = String(structuresSummary.total);
+    }
+    const corridorCount =
+      sbLines.elevated.length +
+      sbLines.service_roads.length +
+      sbLines.re_walls.length +
+      sbLines.drains.length +
+      sbLines.ramps.length +
+      sbLines.paved_shoulders.length;
+    if (corridorCount) badges["Schedule-B Corridor"] = String(corridorCount);
+    if (boreholes.length) badges.Geotechnical = String(boreholes.length);
+    badges.Environment = String(
+      ANALYSIS_OVERLAYS.filter((o) => o.group === "Environment").length,
+    );
+    const socialCount = (villagesData?.count ?? 0) + (affectedHouses?.count ?? 0);
+    if (socialCount) badges["Social Impact"] = String(socialCount);
+    badges.Analysis = String(ANALYSIS_OVERLAYS.filter((o) => o.group === "Analysis").length);
+    return badges;
+  }, [
+    alignmentSummary,
+    transmissionLines,
+    substations,
+    transmissionTowers,
+    structuresSummary,
+    sbLines,
+    boreholes.length,
+    villagesData,
+    affectedHouses,
+  ]);
+
   const treesSummary = useMemo(() => treesSummaryInfo(treesData), [treesData]);
+
+  const groundScourSummary = useMemo(
+    () => summarizeGroundScour(groundScour),
+    [groundScour],
+  );
+
+  const lulcSummary = useMemo(() => lulcSummaryInfo(lulcData), [lulcData]);
+
+  const railwayLinesInfo = useMemo(
+    () => railwayLinesSummary(railwayLines),
+    [railwayLines],
+  );
+  const railwayStationsInfo = useMemo(
+    () => railwayStationsSummary(railwayStations),
+    [railwayStations],
+  );
+  const railwayPlatformsInfo = useMemo(
+    () => railwayPlatformsSummary(railwayPlatforms),
+    [railwayPlatforms],
+  );
 
   /** SVG renderer so CSS blink animation works (map preferCanvas would otherwise draw canvas paths). */
   const blinkSvgRenderer = useMemo(() => L.svg({ padding: 0.5 }), []);
+  /** Draw ground scour above the canvas overlay pane so markers stay visible; hover uses map proximity. */
+  const groundScourSvgRenderer = useMemo(
+    () => L.svg({ padding: 0.5, pane: "markerPane" }),
+    [],
+  );
   const layerBlinkBright = useLayerBlinkPulse(expandedActiveLayerId != null);
 
   const activeOverlayItems = useMemo(
@@ -660,6 +801,17 @@ export default function MapExplorer() {
     () => ({ lat: center[0], lon: center[1] }),
     [center],
   );
+
+  const { setCoords, clearCoords, registerOpenDetails } = topBarWeather;
+
+  useEffect(() => {
+    setCoords(weatherHudCoords.lat, weatherHudCoords.lon);
+    registerOpenDetails(() => setShowWeather(true));
+    return () => {
+      clearCoords();
+      registerOpenDetails(null);
+    };
+  }, [weatherHudCoords.lat, weatherHudCoords.lon, setCoords, clearCoords, registerOpenDetails]);
 
   const weatherModalCoords = useMemo(() => {
     if (cursor) return { lat: cursor[0], lon: cursor[1] };
@@ -835,7 +987,6 @@ export default function MapExplorer() {
     setMeasureTool(tool);
     resetMeasureHistory();
     setMeasureMenuOpen(false);
-    setAlignmentDetails(null);
     setElevationFocus(null);
     setElevationCrossSection(null);
     setSelectedBorehole(null);
@@ -936,103 +1087,424 @@ export default function MapExplorer() {
     [elevationPointIndex],
   );
 
-  const openAlignmentSummary = useCallback(() => {
-    const totalLengthKm = lineFeatures.reduce((sum, l) => sum + (l.lengthKm || 0), 0);
-    const primary =
-      lineFeatures.find((l) => l.folder && l.folder === primaryAlignmentFolder) ??
-      lineFeatures[0];
-    setAlignmentDetails({
-      mode: "summary",
-      name: primary
-        ? primary.folder?.split(" / ").pop() ?? primary.name ?? "Project Alignment"
-        : "Project Alignment",
-      folder: primary?.folder,
-      lengthKm: primary?.lengthKm ?? 0,
-      stroke: primary?.stroke ?? "#c026d3",
-      isCentreline: true,
-      segmentCount: lineFeatures.length,
-      totalLengthKm,
-      chainageKm: null,
-      elevation: null,
-      tcs: null,
-      nearestStructure: null,
-    });
-  }, [lineFeatures, primaryAlignmentFolder]);
-
-  const handleAlignmentClick = useCallback(
-    (
-      line: { name?: string; folder?: string; lengthKm: number; stroke: string },
-      lat: number,
-      lon: number,
-    ) => {
-      if (measure) return;
-      // Nearest centreline elevation point → chainage (km) + ground elevation.
-      let nearest: (ElevationPoint & { latitude: number; longitude: number }) | null = null;
-      let bestD = Infinity;
-      for (const p of elevationMapPoints) {
-        if ((p.branch ?? "centerline") !== "centerline") continue;
-        const d = (p.latitude - lat) ** 2 + (p.longitude - lon) ** 2;
-        if (d < bestD) {
-          bestD = d;
-          nearest = p;
-        }
-      }
-      const chainageKm = nearest ? Number(nearest.chainage) : null;
-      const elevation = nearest ? Number(nearest.elevation) : null;
-
-      let tcs: AlignmentDetails["tcs"] = null;
-      let nearestStructure: AlignmentDetails["nearestStructure"] = null;
-      if (chainageKm != null) {
-        const stretch = scheduleB?.tcs_stretches?.find(
-          (s) => chainageKm >= s.from_km && chainageKm <= s.to_km,
-        );
-        if (stretch) {
-          tcs = {
-            fromKm: stretch.from_km,
-            toKm: stretch.to_km,
-            tcs: stretch.tcs,
-            description: stretch.description,
-          };
-        }
-        let sBest = Infinity;
-        for (const s of structureMarkers) {
-          const d = Math.abs(s.chainage_km - chainageKm);
-          if (d < sBest) {
-            sBest = d;
-            nearestStructure = {
-              label: s.label,
-              type: s.type,
-              chainageKm: s.chainage_km,
-            };
-          }
-        }
-      }
-
-      const totalLengthKm = lineFeatures.reduce((sum, l) => sum + (l.lengthKm || 0), 0);
-      setAlignmentDetails({
-        mode: "point",
-        name: line.folder?.split(" / ").pop() ?? line.name ?? "Alignment",
-        folder: line.folder,
-        lengthKm: line.lengthKm,
-        stroke: line.stroke,
-        isCentreline: !!line.folder && line.folder === primaryAlignmentFolder,
-        segmentCount: lineFeatures.length,
-        totalLengthKm,
-        lat,
-        lon,
-        chainageKm,
-        elevation,
-        tcs,
-        nearestStructure,
-      });
-    },
-    [elevationMapPoints, scheduleB, structureMarkers, primaryAlignmentFolder, lineFeatures, measure],
-  );
-
   return (
-    <div className="relative flex h-screen w-full flex-col pt-16">
-      <div className="relative flex min-h-0 flex-1 flex-col w-full">
-        <div className="relative min-h-0 flex-1">
+    <div className="flex h-dvh w-full flex-col overflow-hidden pt-16">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        {/* Left sidebar — map controls, project overview, layers */}
+        <aside className="flex w-80 shrink-0 flex-col border-r border-white/10 bg-[#0b0e14]">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+            <SidebarSection
+              title="MAP CONTROLS"
+              open={mapControlsOpen}
+              onToggle={() => setMapControlsOpen((v) => !v)}
+            >
+              <div className="grid grid-cols-4 gap-2">
+                <MapControlBtn
+                  icon={Box}
+                  label="3D Map"
+                  color="#12c9b0"
+                  active={mapMode === "3d"}
+                  onClick={() => {
+                    if (mapMode === "2d") {
+                      overlaysBefore3dRef.current = {
+                        overlays: { ...overlays },
+                        showElevation,
+                      };
+                      setOverlays(overlaysFor3d(overlays));
+                      setShowElevation(true);
+                      setShowFloodPanel(false);
+                      setMapMode("3d");
+                    } else {
+                      const prev = overlaysBefore3dRef.current;
+                      if (prev) {
+                        setOverlays(prev.overlays);
+                        setShowElevation(prev.showElevation);
+                        if (!prev.showElevation) {
+                          setElevationFocus(null);
+                          setElevationCrossSection(null);
+                        }
+                      }
+                      overlaysBefore3dRef.current = null;
+                      setMapMode("2d");
+                    }
+                  }}
+                />
+                <MapControlBtn
+                  icon={LayersIcon}
+                  label="Layers"
+                  color="#3b82f6"
+                  onClick={() => {
+                    layersSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
+                />
+                <MapControlBtn
+                  icon={Mountain}
+                  label="Elevation"
+                  color="#f59e0b"
+                  active={showElevation}
+                  disabled={!elevationPoints.length}
+                  onClick={() => {
+                    setShowElevation((v) => {
+                      if (v) {
+                        setElevationFocus(null);
+                        setElevationCrossSection(null);
+                      }
+                      return !v;
+                    });
+                  }}
+                />
+                <MapControlBtn
+                  icon={CloudRain}
+                  label="Weather"
+                  color="#facc15"
+                  onClick={() => setShowWeather(true)}
+                />
+              </div>
+            </SidebarSection>
+
+            <SidebarSection
+              title="PROJECT OVERVIEW"
+              open={projectOverviewOpen}
+              onToggle={() => setProjectOverviewOpen((v) => !v)}
+            >
+              {project && (
+                <div className="rounded-xl border border-white/10 bg-[#161b22] p-3">
+                  <div className="text-sm font-bold leading-snug text-white">{project.name}</div>
+                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-400">
+                    <MapPin className="h-3.5 w-3.5 shrink-0" />
+                    {project.location}
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-2 border-t border-white/10 pt-3">
+                    <OverviewStat
+                      label="Length"
+                      value={`${(alignmentSummary?.totalLengthKm ?? project.stats.total_length_km).toFixed(3)} km`}
+                      color="#22c55e"
+                    />
+                    <OverviewStat
+                      label="Structures"
+                      value={(structuresSummary?.total ?? structureMarkers.length).toLocaleString()}
+                      color="#60a5fa"
+                    />
+                    <OverviewStat
+                      label="Chainage"
+                      value={`${Math.round(alignmentSummary?.endChainageKm ?? project.stats.total_length_km)} km`}
+                      color="#12c9b0"
+                    />
+                  </div>
+                </div>
+              )}
+            </SidebarSection>
+
+            <div ref={layersSectionRef} className="space-y-2">
+              {mapMode === "3d" && (
+                <p className="rounded-lg border border-brand-500/20 bg-brand-500/10 px-2.5 py-2 text-[10px] leading-snug text-brand-200">
+                  3D view: Project Alignment and Elevation only. Other layers stay off until you return to 2D.
+                </p>
+              )}
+              {ANALYSIS_OVERLAY_GROUPS.map((group) => {
+                const items = ANALYSIS_OVERLAYS.filter((o) => o.group === group);
+                if (!items.length) return null;
+                const groupStyle = OVERLAY_GROUP_STYLES[group];
+                return (
+                  <LayerDropdown
+                    key={group}
+                    title={group}
+                    icon={groupStyle?.icon}
+                    color={groupStyle?.color}
+                    open={!!expandedSections[group]}
+                    onToggle={() =>
+                      setExpandedSections((s) => ({ ...s, [group]: !s[group] }))
+                    }
+                    badge={overlayGroupBadges[group]}
+                  >
+                    <OverlayCheckboxList
+                      items={items}
+                      overlays={overlays}
+                      lockedIds={mapMode === "3d" ? MAP_3D_OVERLAY_IDS : null}
+                      onChange={(id, checked) => {
+                        if (mapMode === "3d" && !MAP_3D_OVERLAY_IDS.has(id)) return;
+                        if (mapMode === "3d" && id === "alignment" && !checked) return;
+                        setOverlays((s) => ({ ...s, [id]: checked }));
+                      }}
+                    />
+                    {group === "Alignment & Markers" && overlays.alignment && alignmentLegend.length > 1 && (
+                      <div className="mt-3">
+                        <AlignmentColorLegend items={alignmentLegend} />
+                      </div>
+                    )}
+                    {group === "Alignment & Markers" && overlays.road_categories && (
+                      <div className="mt-3">
+                        <RoadCategoryLegend />
+                      </div>
+                    )}
+                    {group === "Alignment & Markers" && overlays.road_network && roadNetwork && (
+                      <div className="mt-3 space-y-1.5 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
+                        <div className="font-semibold text-white">
+                          Road network · {roadNetwork.count.toLocaleString()} segments
+                        </div>
+                        {roadNetwork.highway_counts.slice(0, 8).map((row) => {
+                          const s = highwayStyle(row.highway);
+                          return (
+                            <div key={row.highway} className="flex items-center gap-2">
+                              <span
+                                className="h-0.5 w-4 shrink-0 rounded-full"
+                                style={{ backgroundColor: s.color }}
+                              />
+                              <span className="flex-1 text-slate-300">{s.label}</span>
+                              <span className="tabular-nums text-slate-500">{row.count}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {group === "Alignment & Markers" && overlays.adjacent_roads && adjacentRoads && (
+                      <div className="mt-3 rounded-lg border border-sky-500/20 bg-sky-500/5 p-2.5 text-xs text-slate-400">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-white">Adjacent roads</span>
+                          <span className="tabular-nums text-slate-300">{adjacentRoads.count}</span>
+                        </div>
+                        <p className="mt-1 text-[10px] leading-snug text-slate-500">
+                          Access points along the corridor
+                        </p>
+                      </div>
+                    )}
+                    {group === "Alignment & Markers" &&
+                      (overlays.railway_lines ||
+                        overlays.railway_stations ||
+                        overlays.railway_platforms) && (
+                        <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
+                          <div className="font-semibold text-white">Railway</div>
+                          {overlays.railway_lines && railwayLines && (
+                            <div className="flex items-center gap-2">
+                              <span className="h-0.5 w-4 shrink-0 border-t-2 border-dashed border-slate-200" />
+                              <span className="flex-1 text-slate-300">Lines</span>
+                              <span className="tabular-nums text-slate-500">{railwayLines.count}</span>
+                            </div>
+                          )}
+                          {overlays.railway_stations && railwayStations && (
+                            <div className="flex items-center gap-2">
+                              <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-orange-500" />
+                              <span className="flex-1 text-slate-300">Stations</span>
+                              <span className="tabular-nums text-slate-500">
+                                {railwayStations.count}
+                              </span>
+                            </div>
+                          )}
+                          {overlays.railway_platforms && railwayPlatforms && (
+                            <div className="flex items-center gap-2">
+                              <span className="h-2.5 w-2.5 shrink-0 rounded-sm bg-slate-900 ring-1 ring-slate-500" />
+                              <span className="flex-1 text-slate-300">Platforms</span>
+                              <span className="tabular-nums text-slate-500">
+                                {railwayPlatforms.count}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    {group === "Utilities" &&
+                      (overlays.transmission_lines ||
+                        overlays.substations ||
+                        overlays.transmission_towers) && (
+                        <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
+                          <div className="font-semibold text-white">Power utilities</div>
+                          {overlays.transmission_lines && transmissionLines && (
+                            <div className="flex items-center gap-2">
+                              <span className="h-0.5 w-4 shrink-0 border-t-2 border-dashed border-yellow-400" />
+                              <span className="flex-1 text-slate-300">Lines</span>
+                              <span className="tabular-nums text-slate-500">
+                                {transmissionLines.count}
+                              </span>
+                            </div>
+                          )}
+                          {overlays.substations && substations && (
+                            <div className="flex items-center gap-2">
+                              <span className="h-2.5 w-2.5 shrink-0 rounded-sm bg-amber-700 ring-1 ring-amber-400" />
+                              <span className="flex-1 text-slate-300">Substations</span>
+                              <span className="tabular-nums text-slate-500">{substations.count}</span>
+                            </div>
+                          )}
+                          {overlays.transmission_towers && transmissionTowers && (
+                            <div className="flex items-center gap-2">
+                              <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-yellow-400" />
+                              <span className="flex-1 text-slate-300">Towers</span>
+                              <span className="tabular-nums text-slate-500">
+                                {transmissionTowers.count}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    {group === "Schedule-B Corridor" && overlays.sb_elevated && (
+                      <p className="mt-3 text-[10px] leading-snug text-slate-500">
+                        Open <span className="text-sky-300">Elevated Viaduct</span> in the Active layers
+                        panel on the right for length, area, and scour summary.
+                      </p>
+                    )}
+                    {group === "Environment" && overlays.lulc && lulcData && lulcData.classes?.length > 0 && (
+                      <div className="mt-3 space-y-1.5 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
+                        <div className="font-semibold text-white">LULC area (m²)</div>
+                        {lulcData.classes.map((c) => (
+                          <div key={c.name} className="flex items-center gap-2">
+                            <span
+                              className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                              style={{ backgroundColor: c.color }}
+                            />
+                            <span className="flex-1 text-slate-300">{c.name}</span>
+                            <span className="tabular-nums text-slate-300">
+                              {c.area_m2 != null
+                                ? `${c.area_m2.toLocaleString()} m²`
+                                : c.area_ha != null
+                                  ? `${c.area_ha.toFixed(3)} ha`
+                                  : c.count}
+                            </span>
+                          </div>
+                        ))}
+                        {(lulcData.total_area_m2 != null || lulcData.total_area_ha != null) && (
+                          <div className="flex items-center justify-between border-t border-white/10 pt-1.5 font-semibold text-slate-200">
+                            <span>TOTAL</span>
+                            <span className="tabular-nums">
+                              {lulcData.total_area_m2 != null
+                                ? `${lulcData.total_area_m2.toLocaleString()} m²`
+                                : `${lulcData.total_area_ha!.toFixed(3)} ha`}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {group === "Environment" &&
+                      (overlays.contours_1m || overlays.contours_0_5m) &&
+                      (contours1m || contours05m) && (
+                        <div className="mt-3 space-y-1.5 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
+                          <div className="font-semibold text-white">Contour elevation</div>
+                          <div
+                            className="h-2 w-full rounded-full"
+                            style={{
+                              background: "linear-gradient(90deg,#0ea5e9,#14b8a6,#f59e0b)",
+                            }}
+                          />
+                          <div className="flex justify-between tabular-nums text-[10px] text-slate-500">
+                            <span>
+                              {Math.min(
+                                contours1m?.elev_min ?? Infinity,
+                                contours05m?.elev_min ?? Infinity,
+                              )}{" "}
+                              m
+                            </span>
+                            <span>
+                              {Math.max(
+                                contours1m?.elev_max ?? -Infinity,
+                                contours05m?.elev_max ?? -Infinity,
+                              )}{" "}
+                              m
+                            </span>
+                          </div>
+                          {overlays.contours_1m && contours1m && (
+                            <div>1 m · {contours1m.count.toLocaleString()} lines</div>
+                          )}
+                          {overlays.contours_0_5m && contours05m && (
+                            <div>0.5 m · {contours05m.count.toLocaleString()} lines</div>
+                          )}
+                        </div>
+                      )}
+                    {group === "Social Impact" && overlays.villages && villagesData && (
+                      <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
+                        <div className="flex items-center gap-2 font-semibold text-white">
+                          <span className="h-2.5 w-2.5 rounded-sm bg-yellow-600" />
+                          Villages
+                        </div>
+                        <div className="mt-1">
+                          {villagesData.count} village boundaries (Digha–Koilwar)
+                        </div>
+                      </div>
+                    )}
+                    {group === "Social Impact" && affectedHouses && affectedHouses.count > 0 && (
+                      <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
+                        <div className="font-semibold text-white">Structures within Acquisition Boundary</div>
+                        <div className="mt-1">
+                          {affectedHouses.count.toLocaleString()} building footprints inside the land
+                          acquisition boundary
+                        </div>
+                      </div>
+                    )}
+                    {group === "Analysis" && overlays.flood && floodData && (
+                      <div className="mt-3 rounded-lg border border-sky-500/20 bg-sky-500/5 p-2.5 text-xs text-slate-400">
+                        <div className="font-semibold text-sky-300">Flood water time series</div>
+                        <div className="mt-1">
+                          {floodData.dates.length} observation dates · water &amp; inundation extent (ha)
+                        </div>
+                        <button
+                          type="button"
+                          className="mt-2 text-[10px] font-medium text-sky-300 hover:text-sky-200"
+                          onClick={() => {
+                            setOverlays((s) => ({ ...s, flood: true }));
+                            setShowFloodPanel(true);
+                          }}
+                        >
+                          Open graph panel
+                        </button>
+                      </div>
+                    )}
+                    {group === "Analysis" && overlays.ground_scour && groundScourSummary && (
+                      <div className="mt-3 rounded-lg border border-rose-500/20 bg-rose-500/5 p-2.5 text-xs text-slate-400">
+                        <div className="font-semibold text-rose-300">
+                          Predictive_Bridge_Scour_Analysis
+                        </div>
+                        <div className="mt-1 space-y-0.5">
+                          <div>
+                            {groundScourSummary.pointCount.toLocaleString()} points ·{" "}
+                            {groundScourSummary.stretchCount} stretches
+                          </div>
+                          <div>
+                            Chainage {groundScourSummary.fromKm?.toFixed(2) ?? "—"}–
+                            {groundScourSummary.toKm?.toFixed(2) ?? "—"} km
+                          </div>
+                          <div>
+                            Scour {groundScourSummary.scourMinM?.toFixed(2) ?? "—"}–
+                            {groundScourSummary.scourMaxM?.toFixed(2) ?? "—"} m
+                          </div>
+                          <div>
+                            Design HFL {groundScourSummary.designHflMinM?.toFixed(2) ?? "—"}–
+                            {groundScourSummary.designHflMaxM?.toFixed(2) ?? "—"} m
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {group === "Analysis" && overlays.slope && (
+                      <div className="mt-3">
+                        <SlopeLegend />
+                      </div>
+                    )}
+                  </LayerDropdown>
+                );
+              })}
+            </div>
+
+            {elevationPoints.length > 0 && (
+              <div className="rounded-xl border border-white/10 bg-[#161b22] p-3 text-xs text-slate-400">
+                <div className="flex items-center gap-1.5 font-semibold uppercase tracking-wide text-slate-300">
+                  Terrain data
+                  <Info className="h-3.5 w-3.5 text-slate-500" />
+                </div>
+                <div className="mt-2 leading-relaxed">
+                  Elevation range:{" "}
+                  {Math.min(...elevationGraphPoints.map((p) => p.elevation)).toFixed(2)} m to{" "}
+                  {Math.max(...elevationGraphPoints.map((p) => p.elevation)).toFixed(2)} m
+                </div>
+                <div className="mt-1 text-slate-500">
+                  LHS/RHS/FS @ 50 m | Δ ~
+                  {(
+                    Math.max(...elevationGraphPoints.map((p) => p.elevation)) -
+                    Math.min(...elevationGraphPoints.map((p) => p.elevation))
+                  ).toFixed(2)}{" "}
+                  m
+                </div>
+              </div>
+            )}
+          </div>
+        </aside>
+
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
         {mapMode === "3d" ? (
           <Map3DView
             project={project}
@@ -1166,54 +1638,36 @@ export default function MapExplorer() {
               />
             ))}
 
-          {/* Alignment — wide invisible hit line under a visible stroke for easy clicks */}
+          {/* Alignment strokes */}
           {overlays.alignment &&
             lineFeatures.map((line, i) => {
               const positions = line.coords.map((c) => [c[1], c[0]]) as [number, number][];
               const color = overlays.slope ? slopeColor(i) : line.stroke;
               const weight = overlays.slope ? 3 : Math.min(6, Math.max(2, line.weight));
-              const onClick = (e: L.LeafletMouseEvent) => {
-                L.DomEvent.stopPropagation(e);
-                handleAlignmentClick(line, e.latlng.lat, e.latlng.lng);
-              };
               return (
-                <Fragment key={"al" + i}>
-                  <Polyline
-                    positions={positions}
-                    pathOptions={{
-                      color: "#000",
-                      weight: 18,
-                      opacity: 0,
-                      interactive: true,
-                    }}
-                    eventHandlers={{ click: onClick }}
-                  />
-                  <Polyline
-                    positions={positions}
-                    pathOptions={{
-                      color,
-                      weight,
-                      opacity: 0.95,
-                      interactive: true,
-                      className:
-                        expandedActiveLayerId === "alignment"
-                          ? "cursor-pointer active-layer-blink"
-                          : "cursor-pointer",
-                    }}
-                    {...(expandedActiveLayerId === "alignment"
-                      ? { renderer: blinkSvgRenderer }
-                      : {})}
-                    eventHandlers={{ click: onClick }}
-                  >
-                    {(line.folder || line.name) && (
-                      <Tooltip sticky opacity={0.9} className="geovision-tooltip">
-                        <span className="font-semibold">
-                          {line.folder?.split(" / ").pop() ?? line.name}
-                        </span>
-                      </Tooltip>
-                    )}
-                  </Polyline>
-                </Fragment>
+                <Polyline
+                  key={"al" + i}
+                  positions={positions}
+                  pathOptions={{
+                    color,
+                    weight,
+                    opacity: 0.95,
+                    interactive: false,
+                    className:
+                      expandedActiveLayerId === "alignment" ? "active-layer-blink" : undefined,
+                  }}
+                  {...(expandedActiveLayerId === "alignment"
+                    ? { renderer: blinkSvgRenderer }
+                    : {})}
+                >
+                  {(line.folder || line.name) && (
+                    <Tooltip sticky opacity={0.9} className="geovision-tooltip">
+                      <span className="font-semibold">
+                        {line.folder?.split(" / ").pop() ?? line.name}
+                      </span>
+                    </Tooltip>
+                  )}
+                </Polyline>
               );
             })}
 
@@ -1286,7 +1740,7 @@ export default function MapExplorer() {
           {(overlays.alignment || overlays.markers) && (
             <ChainageLayer
               ticks={chainageTickLines}
-              stations={uniqueChainagePoints}
+              stations={sortedChainagePoints}
               showTicks={overlays.alignment || overlays.markers}
               showLabels={overlays.markers}
               blink={expandedActiveLayerId === "markers"}
@@ -1295,20 +1749,35 @@ export default function MapExplorer() {
 
           {/* Toll plaza locations from KMZ */}
           {overlays.toll_plazas &&
-            tollPlazaPoints.map((p, i) => (
+            tollPlazaPoints.map((p, i) => {
+              const info = tollPlazaSummary?.byIndex[i];
+              return (
               <Marker key={"toll" + i} position={p.coord} icon={tollPlazaIcon}>
                 <Tooltip direction="top" offset={[0, -16]} opacity={0.95} className="geovision-tooltip">
-                  <span className="font-semibold">Toll Plaza</span>
+                  <span className="font-semibold">{info?.label ?? "Toll Plaza"}</span>
                   <br />
+                  {info?.nearestChainage && (
+                    <>
+                      <span className="text-amber-300">Ch {info.nearestChainage}</span>
+                      <br />
+                    </>
+                  )}
                   <span className="text-slate-400">
                     {p.lat.toFixed(6)}, {p.lon.toFixed(6)}
                   </span>
                 </Tooltip>
                 <Popup className="geovision-popup" minWidth={260} maxWidth={340}>
-                  <TollPlazaPopupContent point={p} project={project} index={i} />
+                  <TollPlazaPopupContent
+                    point={p}
+                    project={project}
+                    index={i}
+                    nearestChainage={info?.nearestChainage ?? null}
+                    distM={info?.distM ?? null}
+                  />
                 </Popup>
               </Marker>
-            ))}
+            );
+            })}
 
           {/* Road category markers (2-lane, 6-lane, etc.) */}
           {overlays.road_categories &&
@@ -1731,7 +2200,7 @@ export default function MapExplorer() {
           {/* LULC (land use / land cover) */}
           {overlays.lulc && lulcData && (
             <GeoJSON
-              key="lulc"
+              key={`lulc-${lulcData.source_file ?? "legacy"}-${lulcData.count}`}
               data={lulcData}
               style={(feature) => {
                 const color =
@@ -1771,6 +2240,57 @@ export default function MapExplorer() {
 
           {/* Flood water / inundation points for selected date */}
           {overlays.flood && floodScene && <FloodLayer scene={floodScene} />}
+
+          {/* Ground scour screening (Design HFL workbook) */}
+          {overlays.ground_scour && groundScour && (
+            <>
+              <GroundScourHoverBridge
+                points={groundScour.points}
+                enabled={!measure}
+                onHover={(point, cursor) => {
+                  setHoveredGroundScour(point);
+                  setGroundScourCursor(cursor);
+                }}
+              />
+              {groundScour.features.map((f) => (
+                <Polyline
+                  key={f.properties.id}
+                  positions={f.geometry.coordinates.map(
+                    ([lon, lat]) => [lat, lon] as [number, number],
+                  )}
+                  pathOptions={{
+                    color: groundScourZoneColor(f.properties.hydraulic_zone),
+                    weight: 5,
+                    opacity: 0.85,
+                    lineCap: "round",
+                    lineJoin: "round",
+                    interactive: false,
+                  }}
+                  renderer={groundScourSvgRenderer}
+                />
+              ))}
+              {groundScour.points.map((p) => {
+                const fill = groundScourDepthColor(p.scour_max_m);
+                const active = hoveredGroundScour?.id === p.id;
+                return (
+                  <CircleMarker
+                    key={`gs-${p.id}`}
+                    center={[p.latitude, p.longitude]}
+                    radius={active ? 9 : 7}
+                    pane="markerPane"
+                    renderer={groundScourSvgRenderer}
+                    pathOptions={{
+                      color: "#fff",
+                      weight: active ? 2.5 : 1.5,
+                      fillColor: fill,
+                      fillOpacity: 1,
+                      interactive: false,
+                    }}
+                  />
+                );
+              })}
+            </>
+          )}
 
           {/* Structures within acquisition boundary (building footprints) */}
           {overlays.affected_houses && affectedHouses && (
@@ -1888,14 +2408,10 @@ export default function MapExplorer() {
 
         {/* top-left controls (layers / elevation) — above Map & Layers panel */}
         <div className="pointer-events-none absolute inset-0 z-[500]">
-          <div className="pointer-events-auto fixed right-4 top-20 z-[600] flex max-h-[calc(100vh-6.5rem)] max-w-[calc(100vw-2rem)] flex-col items-end gap-2 overflow-y-auto">
+          <div className="pointer-events-auto absolute right-4 top-14 z-[600] flex max-h-[calc(100vh-7rem)] max-w-[calc(100vw-22rem)] flex-col items-end gap-2 overflow-hidden">
             {mapMode === "2d" && (
               <>
-            <WeatherHud
-              latitude={weatherHudCoords.lat}
-              longitude={weatherHudCoords.lon}
-              onOpenDetails={() => setShowWeather(true)}
-            />
+            <div className="shrink-0">
             <BaseMapSwitcher
               baseId={baseId}
               opacity={opacity}
@@ -1904,17 +2420,39 @@ export default function MapExplorer() {
               onBaseChange={setBaseId}
               onOpacityChange={setOpacity}
             />
-            {activeOverlayItems.length > 0 && !alignmentDetails && (
-              <div className="flex w-[min(100vw-2rem,16rem)] max-h-[min(50vh,22rem)] flex-col overflow-hidden rounded-xl border border-white/15 bg-ink-950/95 p-2.5 shadow-2xl backdrop-blur-xl">
-                <div className="mb-2 flex shrink-0 items-center justify-between px-1">
+            </div>
+            {activeOverlayItems.length > 0 && (
+              <div
+                className={`flex w-[min(100vw-2rem,16rem)] flex-col overflow-hidden rounded-xl border-2 border-sky-400/60 bg-ink-950/95 p-2.5 shadow-2xl ring-1 ring-sky-300/20 backdrop-blur-xl ${
+                  activeLayersOpen ? "min-h-0 max-h-full flex-1" : "shrink-0"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveLayersOpen((v) => {
+                      if (v) setExpandedActiveLayerId(null);
+                      return !v;
+                    });
+                  }}
+                  className="mb-0 flex w-full shrink-0 items-center justify-between gap-2 px-1 text-left"
+                >
                   <h3 className="text-xs font-bold uppercase tracking-wide text-slate-300">
                     Active layers
                   </h3>
-                  <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] tabular-nums text-slate-400">
-                    {activeOverlayItems.length}
+                  <span className="flex items-center gap-1.5">
+                    <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] tabular-nums text-slate-400">
+                      {activeOverlayItems.length}
+                    </span>
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${
+                        activeLayersOpen ? "rotate-180" : ""
+                      }`}
+                    />
                   </span>
-                </div>
-                <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
+                </button>
+                {activeLayersOpen && (
+                <div className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pr-0.5">
                   {activeOverlayItems.map((item) => {
                     const Icon = OVERLAY_ICONS[item.id] ?? LayersIcon;
                     const open = expandedActiveLayerId === item.id;
@@ -1972,6 +2510,24 @@ export default function MapExplorer() {
                               <StructuresPointsCard info={structuresSummary} compact />
                             ) : item.id === "trees" && treesSummary ? (
                               <TreesSummaryCard info={treesSummary} compact />
+                            ) : item.id === "road_network" && roadNetwork ? (
+                              <RoadNetworkSummaryCard data={roadNetwork} compact />
+                            ) : item.id === "railway_lines" && railwayLinesInfo ? (
+                              <RailwayLinesSummaryCard info={railwayLinesInfo} compact />
+                            ) : item.id === "railway_stations" && railwayStationsInfo ? (
+                              <RailwayStationsSummaryCard info={railwayStationsInfo} compact />
+                            ) : item.id === "railway_platforms" && railwayPlatformsInfo ? (
+                              <RailwayPlatformsSummaryCard info={railwayPlatformsInfo} compact />
+                            ) : item.id === "lulc" && lulcSummary ? (
+                              <LulcSummaryCard info={lulcSummary} compact />
+                            ) : item.id === "markers" && chainagePointsSummary ? (
+                              <ChainagePointsSummaryCard info={chainagePointsSummary} compact />
+                            ) : item.id === "toll_plazas" && tollPlazaSummary ? (
+                              <TollPlazaSummaryCard info={tollPlazaSummary} compact />
+                            ) : item.id === "road_categories" ? (
+                              <RoadCategoriesSummaryCard compact />
+                            ) : item.id === "ground_scour" && groundScourSummary ? (
+                              <GroundScourSummaryCard info={groundScourSummary} compact />
                             ) : (
                               <p className="px-0.5 text-[10px] leading-snug text-slate-400">
                                 {item.description || "Layer is active on the map."}
@@ -1983,89 +2539,29 @@ export default function MapExplorer() {
                     );
                   })}
                 </div>
+                )}
               </div>
             )}
               </>
             )}
           </div>
 
-          <div className="pointer-events-auto fixed left-4 top-20 z-[700] flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  if (mapMode === "2d") {
-                    overlaysBefore3dRef.current = {
-                      overlays: { ...overlays },
-                      showElevation,
-                    };
-                    setOverlays(overlaysFor3d(overlays));
-                    setShowElevation(true);
-                    setShowFloodPanel(false);
-                    setAlignmentDetails(null);
-                    setMapMode("3d");
-                  } else {
-                    const prev = overlaysBefore3dRef.current;
-                    if (prev) {
-                      setOverlays(prev.overlays);
-                      setShowElevation(prev.showElevation);
-                      if (!prev.showElevation) {
-                        setElevationFocus(null);
-                        setElevationCrossSection(null);
-                      }
-                    }
-                    overlaysBefore3dRef.current = null;
-                    setMapMode("2d");
-                  }
-                }}
-                className={`glass flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold ${
-                  mapMode === "3d" ? "ring-1 ring-brand-400/50" : ""
-                }`}
-                title={
-                  mapMode === "2d"
-                    ? "Switch to 3D (alignment + elevation only)"
-                    : "Switch to 2D map"
-                }
-              >
-                <Box className="h-4 w-4 text-brand-400" />
-                {mapMode === "2d" ? "3D Map" : "2D Map"}
-              </button>
-              <button
-                onClick={() => setPanelOpen((v) => !v)}
-                className={`glass flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold ${
-                  panelOpen ? "ring-1 ring-brand-400/50" : ""
-                }`}
-              >
-                <LayersIcon className="h-4 w-4 text-brand-400" /> Layers
-              </button>
-              <button
-                onClick={() => {
-                  setShowElevation((v) => {
-                    if (v) {
-                    setElevationFocus(null);
-                    setElevationCrossSection(null);
-                  }
-                    return !v;
-                  });
-                }}
-                disabled={!elevationPoints.length}
-                className={`glass flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold disabled:opacity-40 ${
-                  showElevation ? "ring-1 ring-brand-400/50" : ""
-                }`}
-              >
-                <Mountain className="h-4 w-4 text-brand-400" /> Elevation Profile
-              </button>
-              <button
-                onClick={() => setShowWeather(true)}
-                className="glass flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold"
-              >
-                <CloudRain className="h-4 w-4 text-brand-400" /> Weather
-              </button>
+          {overlays.alignment && alignmentSummary && (
+            <div className="pointer-events-auto absolute bottom-6 right-4 z-[600] max-w-xs rounded-xl border border-white/10 bg-ink-950/90 px-3 py-2.5 text-xs text-slate-300 shadow-xl backdrop-blur-xl">
+              <div className="font-semibold text-white">
+                Length: {alignmentSummary.totalLengthKm.toFixed(2)} km
+              </div>
+              <div className="mt-1 text-slate-400">
+                Chainage: CH {formatChainage(alignmentSummary.startChainageKm)} to CH{" "}
+                {formatChainage(alignmentSummary.endChainageKm)}
+              </div>
             </div>
+          )}
 
-          {/* tools + readouts bottom-right */}
-          <div className="pointer-events-auto absolute bottom-6 right-4 flex flex-col items-end gap-2">
+          {/* tools + readouts — centre bottom, horizontal */}
+          <div className="pointer-events-auto absolute bottom-6 left-1/2 z-[600] flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2">
             {mapMode === "2d" && (
-            <div className="pointer-events-none flex flex-col items-end gap-2">
+            <div className="pointer-events-none flex flex-wrap items-center justify-center gap-2">
               <div className="glass rounded-lg px-3 py-1.5 text-xs text-slate-200">
                 {mapScaleLabel}
               </div>
@@ -2117,7 +2613,7 @@ export default function MapExplorer() {
               )}
             </div>
             )}
-            <div className="flex flex-col gap-2">
+            <div className="relative flex flex-row items-center gap-2">
               {mapMode === "2d" && (
                 <>
               <StreetViewPegman
@@ -2125,9 +2621,9 @@ export default function MapExplorer() {
                 onDrop={handleStreetViewDrop}
                 onDraggingChange={setStreetViewDragging}
               />
-              <div className="relative flex flex-col items-end gap-1">
+              <div className="relative flex flex-row items-center gap-2">
                 {measureMenuOpen && (
-                  <div className="glass absolute bottom-12 right-0 z-[900] w-52 overflow-hidden rounded-xl border border-white/15 text-left shadow-xl">
+                  <div className="glass absolute bottom-12 left-1/2 z-[900] w-52 -translate-x-1/2 overflow-hidden rounded-xl border border-white/15 text-left shadow-xl">
                     <div className="border-b border-white/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
                       Measure tools
                     </div>
@@ -2168,41 +2664,39 @@ export default function MapExplorer() {
                     )}
                   </div>
                 )}
-                <div className="flex flex-col gap-2">
-                  {measure && (
-                    <>
-                      <ToolBtn
-                        onClick={undoMeasure}
-                        active={false}
-                        title={canMeasureUndo ? "Undo last point (Ctrl+Z)" : "Nothing to undo"}
-                        disabled={!canMeasureUndo}
-                      >
-                        <Undo2 className="h-4 w-4" />
-                      </ToolBtn>
-                      <ToolBtn
-                        onClick={redoMeasure}
-                        active={false}
-                        title={canMeasureRedo ? "Redo point (Ctrl+Y)" : "Nothing to redo"}
-                        disabled={!canMeasureRedo}
-                      >
-                        <Redo2 className="h-4 w-4" />
-                      </ToolBtn>
-                    </>
-                  )}
-                  <ToolBtn
-                    active={measure}
-                    onClick={() => {
-                      if (measureTool) {
-                        exitMeasure();
-                        return;
-                      }
-                      setMeasureMenuOpen((v) => !v);
-                    }}
-                    title={measure ? "Exit measure mode" : "Measure tools"}
-                  >
-                    <Ruler className="h-4 w-4" />
-                  </ToolBtn>
-                </div>
+                {measure && (
+                  <>
+                    <ToolBtn
+                      onClick={undoMeasure}
+                      active={false}
+                      title={canMeasureUndo ? "Undo last point (Ctrl+Z)" : "Nothing to undo"}
+                      disabled={!canMeasureUndo}
+                    >
+                      <Undo2 className="h-4 w-4" />
+                    </ToolBtn>
+                    <ToolBtn
+                      onClick={redoMeasure}
+                      active={false}
+                      title={canMeasureRedo ? "Redo point (Ctrl+Y)" : "Nothing to redo"}
+                      disabled={!canMeasureRedo}
+                    >
+                      <Redo2 className="h-4 w-4" />
+                    </ToolBtn>
+                  </>
+                )}
+                <ToolBtn
+                  active={measure}
+                  onClick={() => {
+                    if (measureTool) {
+                      exitMeasure();
+                      return;
+                    }
+                    setMeasureMenuOpen((v) => !v);
+                  }}
+                  title={measure ? "Exit measure mode" : "Measure tools"}
+                >
+                  <Ruler className="h-4 w-4" />
+                </ToolBtn>
               </div>
                 </>
               )}
@@ -2212,447 +2706,12 @@ export default function MapExplorer() {
             </div>
           </div>
         </div>
-
-        {/* Alignment details — side shutter, slides in from the right */}
-        <div
-          className={`fixed right-0 top-44 z-[800] flex max-h-[calc(100vh-12rem)] w-56 flex-col overflow-hidden rounded-l-2xl border border-white/15 border-r-0 bg-ink-950/95 p-3 shadow-2xl backdrop-blur-xl transition-transform duration-300 ease-in-out ${
-            alignmentDetails ? "-translate-x-4 pointer-events-auto" : "translate-x-full pointer-events-none"
-          }`}
-          aria-hidden={!alignmentDetails}
-        >
-          <div className="mb-3 flex shrink-0 items-center justify-between">
-            <h3 className="flex items-center gap-2 text-sm font-bold text-white">
-              <Route className="h-4 w-4 text-brand-400" /> Alignment details
-            </h3>
-            <button
-              type="button"
-              onClick={() => setAlignmentDetails(null)}
-              className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          {alignmentDetails && (
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5">
-              <div className="grid grid-cols-2 gap-2">
-                {alignmentLegend.map((item) => {
-                  const selected =
-                    alignmentDetails.mode === "point" &&
-                    item.color.toLowerCase() === alignmentDetails.stroke.toLowerCase();
-                  const isCentreline =
-                    !!item.folder && item.folder === primaryAlignmentFolder;
-                  return (
-                    <div
-                      key={item.color}
-                      className={`aspect-square rounded-xl border p-2.5 flex flex-col ${
-                        selected
-                          ? "border-brand-400/60 bg-brand-500/15 ring-1 ring-brand-400/40"
-                          : "border-white/10 bg-white/5"
-                      }`}
-                    >
-                      <div
-                        className="mb-2 h-3 w-full shrink-0 rounded-sm"
-                        style={{ backgroundColor: item.color }}
-                      />
-                      <div className="min-h-0 flex-1 overflow-hidden">
-                        <div className="line-clamp-2 text-[11px] font-semibold leading-snug text-white">
-                          {item.label}
-                        </div>
-                        {isCentreline && (
-                          <div className="mt-0.5 text-[9px] font-medium uppercase tracking-wide text-brand-300">
-                            Design centreline
-                          </div>
-                        )}
-                      </div>
-                      <div className="mt-auto space-y-0.5 pt-1 text-[10px] text-slate-400">
-                        <div className="flex justify-between gap-1">
-                          <span>Length</span>
-                          <span className="tabular-nums text-slate-200">
-                            {item.lengthKm > 0 ? `${item.lengthKm.toFixed(1)} km` : "—"}
-                          </span>
-                        </div>
-                        <div className="flex justify-between gap-1">
-                          <span>Segments</span>
-                          <span className="tabular-nums text-slate-200">{item.segmentCount}</span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {alignmentDetails.mode === "point" && (
-                <DetailCard title="At clicked point">
-                  <PopupRow
-                    label="Chainage"
-                    value={
-                      alignmentDetails.chainageKm != null
-                        ? formatChainage(alignmentDetails.chainageKm)
-                        : "—"
-                    }
-                  />
-                  <PopupRow
-                    label="Ground elevation"
-                    value={
-                      alignmentDetails.elevation != null
-                        ? `${alignmentDetails.elevation.toFixed(1)} m`
-                        : "—"
-                    }
-                  />
-                  {alignmentDetails.lat != null && alignmentDetails.lon != null && (
-                    <PopupRow
-                      label="Coordinates"
-                      value={`${alignmentDetails.lat.toFixed(5)}, ${alignmentDetails.lon.toFixed(5)}`}
-                    />
-                  )}
-                </DetailCard>
-              )}
-
-              {alignmentDetails.mode === "summary" && (
-                <p className="text-[11px] leading-snug text-slate-500">
-                  Click any alignment line on the map for chainage, elevation, and Schedule-B context.
-                </p>
-              )}
-
-              {(alignmentDetails.tcs || alignmentDetails.nearestStructure) && (
-                <DetailCard title="Schedule-B context">
-                  {alignmentDetails.tcs && (
-                    <>
-                      <PopupRow
-                        label="Cross section"
-                        value={alignmentDetails.tcs.tcs ?? alignmentDetails.tcs.description ?? "—"}
-                      />
-                      <PopupRow
-                        label="Stretch"
-                        value={`${formatChainage(alignmentDetails.tcs.fromKm)} – ${formatChainage(
-                          alignmentDetails.tcs.toKm,
-                        )}`}
-                      />
-                    </>
-                  )}
-                  {alignmentDetails.nearestStructure && (
-                    <PopupRow
-                      label="Nearest structure"
-                      value={`${structureTypeLabel(alignmentDetails.nearestStructure.type)} @ ${formatChainage(
-                        alignmentDetails.nearestStructure.chainageKm,
-                      )}`}
-                    />
-                  )}
-                </DetailCard>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Layer panel — slides in from the left */}
-        <div
-          className={`fixed left-0 top-44 z-[600] max-h-[calc(100vh-11rem)] w-80 overflow-y-auto rounded-r-2xl border border-white/10 border-l-0 bg-ink-900/90 p-4 shadow-2xl backdrop-blur-xl transition-transform duration-300 ease-in-out ${
-            panelOpen ? "translate-x-4 pointer-events-auto" : "-translate-x-full pointer-events-none"
-          }`}
-          aria-hidden={!panelOpen}
-        >
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-white">Map & Layers</h3>
-              <button onClick={() => setPanelOpen(false)} className="text-slate-400 hover:text-white">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            {project && (
-              <div className="mb-4 rounded-xl border border-white/10 bg-white/5 p-3">
-                <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                  <Route className="h-4 w-4 text-brand-400" /> {project.name}
-                </div>
-                <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-400">
-                  <MapPin className="h-3 w-3" /> {project.location}
-                </div>
-                <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                  <MiniStat label="Lines" value={project.stats.line_count.toLocaleString()} />
-                  <MiniStat label="Points" value={project.stats.point_count.toLocaleString()} />
-                  <MiniStat label="Km drawn" value={Math.round(project.stats.total_length_km).toLocaleString()} />
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              {mapMode === "3d" && (
-                <p className="rounded-lg border border-brand-500/20 bg-brand-500/10 px-2.5 py-2 text-[10px] leading-snug text-brand-200">
-                  3D view: Project Alignment and Elevation only. Other layers stay off until you return to 2D.
-                </p>
-              )}
-              {ANALYSIS_OVERLAY_GROUPS.map((group) => {
-                const items = ANALYSIS_OVERLAYS.filter((o) => o.group === group);
-                if (!items.length) return null;
-                const activeCount = items.filter((o) => overlays[o.id]).length;
-                const groupStyle = OVERLAY_GROUP_STYLES[group];
-                return (
-                  <LayerDropdown
-                    key={group}
-                    title={group}
-                    icon={groupStyle?.icon}
-                    color={groupStyle?.color}
-                    open={!!expandedSections[group]}
-                    onToggle={() =>
-                      setExpandedSections((s) => ({ ...s, [group]: !s[group] }))
-                    }
-                    badge={activeCount > 0 ? `${activeCount}/${items.length} on` : undefined}
-                  >
-                    <OverlayCheckboxList
-                      items={items}
-                      overlays={overlays}
-                      lockedIds={mapMode === "3d" ? MAP_3D_OVERLAY_IDS : null}
-                      onChange={(id, checked) => {
-                        if (mapMode === "3d" && !MAP_3D_OVERLAY_IDS.has(id)) return;
-                        if (mapMode === "3d" && id === "alignment" && !checked) return;
-                        setOverlays((s) => ({ ...s, [id]: checked }));
-                        if (id === "alignment") {
-                          if (checked) openAlignmentSummary();
-                          else setAlignmentDetails(null);
-                        }
-                      }}
-                    />
-                    {group === "Alignment & Markers" && overlays.alignment && (
-                      <button
-                        type="button"
-                        onClick={openAlignmentSummary}
-                        className="mt-2 w-full rounded-lg border border-brand-500/30 bg-brand-500/10 px-2.5 py-1.5 text-left text-[11px] font-medium text-brand-200 hover:bg-brand-500/20"
-                      >
-                        Open alignment details panel →
-                      </button>
-                    )}
-                    {group === "Alignment & Markers" && overlays.alignment && alignmentLegend.length > 1 && (
-                      <div className="mt-3">
-                        <AlignmentColorLegend items={alignmentLegend} />
-                      </div>
-                    )}
-                    {group === "Alignment & Markers" && overlays.road_categories && (
-                      <div className="mt-3">
-                        <RoadCategoryLegend />
-                      </div>
-                    )}
-                    {group === "Alignment & Markers" && overlays.road_network && roadNetwork && (
-                      <div className="mt-3 space-y-1.5 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
-                        <div className="font-semibold text-white">
-                          Road network · {roadNetwork.count.toLocaleString()} segments
-                        </div>
-                        {roadNetwork.highway_counts.slice(0, 8).map((row) => {
-                          const s = highwayStyle(row.highway);
-                          return (
-                            <div key={row.highway} className="flex items-center gap-2">
-                              <span
-                                className="h-0.5 w-4 shrink-0 rounded-full"
-                                style={{ backgroundColor: s.color }}
-                              />
-                              <span className="flex-1 text-slate-300">{s.label}</span>
-                              <span className="tabular-nums text-slate-500">{row.count}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                    {group === "Alignment & Markers" && overlays.adjacent_roads && adjacentRoads && (
-                      <div className="mt-3 rounded-lg border border-sky-500/20 bg-sky-500/5 p-2.5 text-xs text-slate-400">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-semibold text-white">Adjacent roads</span>
-                          <span className="tabular-nums text-slate-300">{adjacentRoads.count}</span>
-                        </div>
-                        <p className="mt-1 text-[10px] leading-snug text-slate-500">
-                          Access points along the corridor
-                        </p>
-                      </div>
-                    )}
-                    {group === "Alignment & Markers" &&
-                      (overlays.railway_lines ||
-                        overlays.railway_stations ||
-                        overlays.railway_platforms) && (
-                        <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
-                          <div className="font-semibold text-white">Railway</div>
-                          {overlays.railway_lines && railwayLines && (
-                            <div className="flex items-center gap-2">
-                              <span className="h-0.5 w-4 shrink-0 border-t-2 border-dashed border-slate-200" />
-                              <span className="flex-1 text-slate-300">Lines</span>
-                              <span className="tabular-nums text-slate-500">{railwayLines.count}</span>
-                            </div>
-                          )}
-                          {overlays.railway_stations && railwayStations && (
-                            <div className="flex items-center gap-2">
-                              <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-orange-500" />
-                              <span className="flex-1 text-slate-300">Stations</span>
-                              <span className="tabular-nums text-slate-500">
-                                {railwayStations.count}
-                              </span>
-                            </div>
-                          )}
-                          {overlays.railway_platforms && railwayPlatforms && (
-                            <div className="flex items-center gap-2">
-                              <span className="h-2.5 w-2.5 shrink-0 rounded-sm bg-slate-900 ring-1 ring-slate-500" />
-                              <span className="flex-1 text-slate-300">Platforms</span>
-                              <span className="tabular-nums text-slate-500">
-                                {railwayPlatforms.count}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    {group === "Utilities" &&
-                      (overlays.transmission_lines ||
-                        overlays.substations ||
-                        overlays.transmission_towers) && (
-                        <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
-                          <div className="font-semibold text-white">Power utilities</div>
-                          {overlays.transmission_lines && transmissionLines && (
-                            <div className="flex items-center gap-2">
-                              <span className="h-0.5 w-4 shrink-0 border-t-2 border-dashed border-yellow-400" />
-                              <span className="flex-1 text-slate-300">Lines</span>
-                              <span className="tabular-nums text-slate-500">
-                                {transmissionLines.count}
-                              </span>
-                            </div>
-                          )}
-                          {overlays.substations && substations && (
-                            <div className="flex items-center gap-2">
-                              <span className="h-2.5 w-2.5 shrink-0 rounded-sm bg-amber-700 ring-1 ring-amber-400" />
-                              <span className="flex-1 text-slate-300">Substations</span>
-                              <span className="tabular-nums text-slate-500">{substations.count}</span>
-                            </div>
-                          )}
-                          {overlays.transmission_towers && transmissionTowers && (
-                            <div className="flex items-center gap-2">
-                              <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-yellow-400" />
-                              <span className="flex-1 text-slate-300">Towers</span>
-                              <span className="tabular-nums text-slate-500">
-                                {transmissionTowers.count}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    {group === "Schedule-B Corridor" && overlays.sb_elevated && (
-                      <p className="mt-3 text-[10px] leading-snug text-slate-500">
-                        Open <span className="text-sky-300">Elevated Viaduct</span> in the Active layers
-                        panel on the right for length, area, and scour summary.
-                      </p>
-                    )}
-                    {group === "Environment" && overlays.lulc && lulcData && lulcData.classes?.length > 0 && (
-                      <div className="mt-3 space-y-1.5 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
-                        <div className="font-semibold text-white">LULC classes</div>
-                        {lulcData.classes.map((c) => (
-                          <div key={c.name} className="flex items-center gap-2">
-                            <span
-                              className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                              style={{ backgroundColor: c.color }}
-                            />
-                            <span className="flex-1 text-slate-300">{c.name}</span>
-                            <span className="tabular-nums text-slate-500">{c.count}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {group === "Environment" &&
-                      (overlays.contours_1m || overlays.contours_0_5m) &&
-                      (contours1m || contours05m) && (
-                        <div className="mt-3 space-y-1.5 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
-                          <div className="font-semibold text-white">Contour elevation</div>
-                          <div
-                            className="h-2 w-full rounded-full"
-                            style={{
-                              background:
-                                "linear-gradient(90deg,#0ea5e9,#14b8a6,#f59e0b)",
-                            }}
-                          />
-                          <div className="flex justify-between tabular-nums text-[10px] text-slate-500">
-                            <span>
-                              {Math.min(
-                                contours1m?.elev_min ?? Infinity,
-                                contours05m?.elev_min ?? Infinity,
-                              )}{" "}
-                              m
-                            </span>
-                            <span>
-                              {Math.max(
-                                contours1m?.elev_max ?? -Infinity,
-                                contours05m?.elev_max ?? -Infinity,
-                              )}{" "}
-                              m
-                            </span>
-                          </div>
-                          {overlays.contours_1m && contours1m && (
-                            <div>
-                              1 m · {contours1m.count.toLocaleString()} lines
-                            </div>
-                          )}
-                          {overlays.contours_0_5m && contours05m && (
-                            <div>
-                              0.5 m · {contours05m.count.toLocaleString()} lines
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    {group === "Social Impact" && overlays.villages && villagesData && (
-                      <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
-                        <div className="flex items-center gap-2 font-semibold text-white">
-                          <span className="h-2.5 w-2.5 rounded-sm bg-yellow-600" />
-                          Villages
-                        </div>
-                        <div className="mt-1">
-                          {villagesData.count} village boundaries (Digha–Koilwar)
-                        </div>
-                      </div>
-                    )}
-                    {group === "Social Impact" && affectedHouses && affectedHouses.count > 0 && (
-                      <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
-                        <div className="font-semibold text-white">Structures within Acquisition Boundary</div>
-                        <div className="mt-1">
-                          {affectedHouses.count.toLocaleString()} building footprints inside the land
-                          acquisition boundary
-                        </div>
-                      </div>
-                    )}
-                    {group === "Analysis" && overlays.flood && floodData && (
-                      <div className="mt-3 rounded-lg border border-sky-500/20 bg-sky-500/5 p-2.5 text-xs text-slate-400">
-                        <div className="font-semibold text-sky-300">Flood water time series</div>
-                        <div className="mt-1">
-                          {floodData.dates.length} observation dates · water &amp; inundation extent (ha)
-                        </div>
-                        <button
-                          type="button"
-                          className="mt-2 text-[10px] font-medium text-sky-300 hover:text-sky-200"
-                          onClick={() => {
-                            setOverlays((s) => ({ ...s, flood: true }));
-                            setShowFloodPanel(true);
-                          }}
-                        >
-                          Open graph panel
-                        </button>
-                      </div>
-                    )}
-                    {group === "Analysis" && overlays.slope && (
-                      <div className="mt-3">
-                        <SlopeLegend />
-                      </div>
-                    )}
-                  </LayerDropdown>
-                );
-              })}
-            </div>
-
-            {elevationPoints.length > 0 && (
-              <div className="mt-4 rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-slate-400">
-                <div className="font-semibold text-white">Terrain data</div>
-                <div className="mt-1">
-                  Ground elevation · {elevationGraphPoints.length.toLocaleString()} pts (centre + LHS/RHS @ 50 m) ·{" "}
-                  {Math.min(...elevationGraphPoints.map((p) => p.elevation)).toFixed(0)}–
-                  {Math.max(...elevationGraphPoints.map((p) => p.elevation)).toFixed(0)} m
-                </div>
-              </div>
-            )}
-          </div>
-
         </div>
 
         {showElevation && elevationGraphPoints.length > 0 && (
           <ElevationGraphModal
             points={elevationGraphPoints}
+            hflPoints={designHflPoints}
             exportPoints={elevationPoints}
             projectName={project?.name}
             onClose={() => {
@@ -2702,7 +2761,114 @@ export default function MapExplorer() {
             onClose={() => setStreetViewPoint(null)}
           />
         )}
+
+        {overlays.ground_scour &&
+          hoveredGroundScour &&
+          groundScourCursor &&
+          createPortal(
+            <div
+              className="pointer-events-none fixed z-[10000] w-[22rem] max-h-[min(88vh,34rem)] overflow-y-auto rounded-xl border border-rose-400/50 bg-ink-950 shadow-2xl ring-1 ring-rose-300/30"
+              style={{
+                left: Math.min(Math.max(groundScourCursor.x, 176), window.innerWidth - 176),
+                top: groundScourCursor.y,
+                transform:
+                  groundScourCursor.y < window.innerHeight * 0.45
+                    ? "translate(-50%, 16px)"
+                    : "translate(-50%, calc(-100% - 16px))",
+              }}
+            >
+              <GroundScourPointCard point={hoveredGroundScour} />
+            </div>,
+            document.body,
+          )}
       </div>
+      </div>
+    </div>
+  );
+}
+
+function SidebarSection({
+  title,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-white/10 bg-[#161b22]/80">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between px-3 py-2.5 text-left"
+      >
+        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+          {title}
+        </span>
+        <ChevronDown
+          className={`h-4 w-4 text-slate-500 transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && <div className="border-t border-white/10 px-3 pb-3 pt-2">{children}</div>}
+    </section>
+  );
+}
+
+function MapControlBtn({
+  icon: Icon,
+  label,
+  color,
+  active = false,
+  disabled = false,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  color: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`flex flex-col items-center gap-1.5 rounded-xl border border-white/10 bg-[#0f141c] p-2 transition hover:border-white/20 disabled:opacity-40 ${
+        active ? "ring-1 ring-brand-400/50" : ""
+      }`}
+    >
+      <span
+        className="grid h-9 w-9 place-items-center rounded-lg"
+        style={{ backgroundColor: `${color}22`, color }}
+      >
+        <Icon className="h-4 w-4" strokeWidth={2.25} />
+      </span>
+      <span className="text-center text-[10px] font-medium leading-tight text-slate-300">
+        {label}
+      </span>
+    </button>
+  );
+}
+
+function OverviewStat({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color: string;
+}) {
+  return (
+    <div className="text-center">
+      <div className="text-base font-bold tabular-nums" style={{ color }}>
+        {value}
+      </div>
+      <div className="mt-0.5 text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
     </div>
   );
 }
@@ -2814,6 +2980,7 @@ const OVERLAY_ICONS: Record<string, LucideIcon> = {
   villages: Home,
   affected_houses: Building2,
   flood: CloudRain,
+  ground_scour: Waves,
   corridor: Fence,
   slope: Mountain,
 };
@@ -3028,10 +3195,14 @@ function TollPlazaPopupContent({
   point,
   project,
   index,
+  nearestChainage = null,
+  distM = null,
 }: {
   point: MapPoint;
   project: Project | null;
   index: number;
+  nearestChainage?: string | null;
+  distM?: number | null;
 }) {
   return (
     <div className="geovision-popup__body">
@@ -3042,6 +3213,12 @@ function TollPlazaPopupContent({
       </div>
 
       <dl className="geovision-popup__rows">
+        {nearestChainage && (
+          <PopupRow label="Nearest chainage" value={`CH ${nearestChainage}`} />
+        )}
+        {distM != null && (
+          <PopupRow label="Offset from alignment" value={`${Math.round(distM)} m`} />
+        )}
         <PopupRow label="Latitude" value={point.lat.toFixed(6)} />
         <PopupRow label="Longitude" value={point.lon.toFixed(6)} />
         {point.alt != null && !Number.isNaN(point.alt) && (
@@ -3116,6 +3293,109 @@ function PointPopupContent({
           </dl>
         </>
       )}
+    </div>
+  );
+}
+
+function GroundScourPointCard({ point }: { point: GroundScourPoint }) {
+  const fmt = (v: number | null | undefined, digits = 2) =>
+    v != null && Number.isFinite(v) ? v.toFixed(digits) : "—";
+
+  const accent = groundScourDepthColor(point.scour_max_m);
+
+  const Metric = ({
+    label,
+    value,
+  }: {
+    label: string;
+    value: string;
+  }) => (
+    <div className="min-w-0 rounded-md bg-white/[0.03] px-2 py-1.5">
+      <div className="truncate text-[9px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-0.5 truncate text-[11px] font-semibold tabular-nums text-slate-100">
+        {value}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-2.5 p-3 text-[11px]">
+      <div className="border-b border-white/10 pb-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-bold text-white">
+              Predictive_Bridge_Scour_Analysis · {point.id}
+            </div>
+            <div className="mt-0.5 truncate text-[11px] text-slate-400">
+              Ch {fmt(point.chainage_km, 3)} km · {point.hydraulic_zone ?? "Zone"}
+              {point.flow ? ` · ${point.flow}` : ""}
+            </div>
+          </div>
+          <div
+            className="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+            style={{ borderColor: accent, color: accent }}
+          >
+            {fmt(point.scour_max_m)} m
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">
+          Location
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          <Metric label="Latitude" value={fmt(point.latitude, 6)} />
+          <Metric label="Longitude" value={fmt(point.longitude, 6)} />
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">
+          Ground elevation
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          <Metric label="SRTM" value={`${fmt(point.ground_elev_m)} m`} />
+          <Metric
+            label="Corrected"
+            value={`${fmt(point.ground_elev_corrected_m)} m`}
+          />
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">
+          Hydraulics
+        </div>
+        <div className="grid grid-cols-3 gap-1.5">
+          <Metric
+            label="Seasons wet"
+            value={
+              point.seasons_wet_of_4 != null ? `${point.seasons_wet_of_4}/4` : "—"
+            }
+          />
+          <Metric label="D Pre" value={`${fmt(point.d_pre_m, 3)} m`} />
+          <Metric label="D Post" value={`${fmt(point.d_post_m, 3)} m`} />
+          <Metric label="V Pre" value={`${fmt(point.v_pre_ms, 3)} m/s`} />
+          <Metric label="V Post" value={`${fmt(point.v_post_ms, 3)} m/s`} />
+          <Metric label="q Post" value={`${fmt(point.q_post_m3sm, 4)}`} />
+        </div>
+        <div className="mt-1 text-[9px] text-slate-500">q Post unit: m³/s/m</div>
+      </div>
+
+      <div>
+        <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">
+          Scour & design HFL
+        </div>
+        <div className="grid grid-cols-3 gap-1.5">
+          <Metric label="Scour min" value={`${fmt(point.scour_min_m)} m`} />
+          <Metric label="Scour max" value={`${fmt(point.scour_max_m)} m`} />
+          <Metric
+            label="Design HFL"
+            value={`${fmt(point.design_hfl_continuous_m)} m`}
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -3499,6 +3779,526 @@ function ShoulderCard({
   );
 }
 
+function RoadCategoriesSummaryCard({ compact = false }: { compact?: boolean }) {
+  const accent = "#22c55e";
+  const rows: RoadCategoryDetail[] = ROAD_CATEGORY_DETAILS;
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-emerald-400/25 bg-emerald-500/5 p-2"
+          : "rounded-xl border border-emerald-400/35 bg-emerald-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-emerald-300">
+        Lane configuration / TCS
+      </div>
+      <div className="max-h-64 space-y-2 overflow-y-auto text-[10px]">
+        {rows.map((row) => (
+          <div
+            key={row.category}
+            className="space-y-0.5 rounded-md border border-white/10 bg-white/[0.03] p-1.5"
+          >
+            <div className="flex items-start gap-1.5">
+              <span
+                className="mt-0.5 h-2 w-2 shrink-0 rounded-sm"
+                style={{ backgroundColor: row.color }}
+              />
+              <span className="min-w-0 flex-1 font-semibold leading-snug text-slate-100">
+                {row.category}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2 pl-3.5 text-slate-400">
+              <span>Structure</span>
+              <span className="text-right text-slate-200">{row.structureType}</span>
+            </div>
+            <div className="flex justify-between gap-2 pl-3.5 text-slate-400">
+              <span>TCS</span>
+              <span className="tabular-nums font-semibold text-slate-100">{row.tcs}</span>
+            </div>
+            <div className="flex justify-between gap-2 pl-3.5 text-slate-400">
+              <span>Stretch</span>
+              <span className="text-right font-semibold text-emerald-200">{row.stretch}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function GroundScourSummaryCard({
+  info,
+  compact = false,
+}: {
+  info: GroundScourSummary;
+  compact?: boolean;
+}) {
+  const accent = "#f43f5e";
+  const rows: Array<{ label: string; value: string }> = [
+    { label: "Points", value: info.pointCount.toLocaleString() },
+    { label: "Stretches", value: String(info.stretchCount) },
+    {
+      label: "Chainage",
+      value: `${info.fromKm?.toFixed(2) ?? "—"}–${info.toKm?.toFixed(2) ?? "—"} km`,
+    },
+    {
+      label: "Scour range",
+      value: `${info.scourMinM?.toFixed(2) ?? "—"}–${info.scourMaxM?.toFixed(2) ?? "—"} m`,
+    },
+    {
+      label: "Design HFL",
+      value: `${info.designHflMinM?.toFixed(2) ?? "—"}–${info.designHflMaxM?.toFixed(2) ?? "—"} m`,
+    },
+  ];
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-rose-400/25 bg-rose-500/5 p-2"
+          : "rounded-xl border border-rose-400/35 bg-rose-500/10 p-2.5"
+      }
+    >
+      <div
+        className={compact ? "mb-2 h-1.5 w-full rounded-full" : "mb-2 h-3 w-full rounded-sm"}
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-rose-300">
+        Predictive_Bridge_Scour_Analysis
+      </div>
+      <div className="space-y-1 text-[10px]">
+        {rows.map((row) => (
+          <div key={row.label} className="flex justify-between gap-2">
+            <span className="text-slate-400">{row.label}</span>
+            <span className="tabular-nums font-medium text-white">{row.value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2 border-t border-white/10 pt-2 text-[9px] text-slate-500">
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-emerald-500" /> &lt;2 m
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-yellow-500" /> 2–5 m
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-orange-500" /> 5–8 m
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-red-500" /> ≥8 m
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function TollPlazaSummaryCard({
+  info,
+  compact = false,
+}: {
+  info: {
+    totalCount: number;
+    items: Array<{
+      id: string;
+      label: string;
+      nearestChainage: string | null;
+      distM: number | null;
+    }>;
+  };
+  compact?: boolean;
+}) {
+  const accent = "#f59e0b";
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-amber-400/25 bg-amber-500/5 p-2"
+          : "rounded-xl border border-amber-400/35 bg-amber-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-amber-300">
+        Toll plaza locations
+      </div>
+      <div className="space-y-1 text-[10px]">
+        <div className="flex justify-between gap-2 text-slate-400">
+          <span>• Total Toll Plazas</span>
+          <span className="tabular-nums font-semibold text-slate-100">{info.totalCount}</span>
+        </div>
+        <div className="max-h-48 space-y-1.5 overflow-y-auto border-t border-white/10 pt-1.5">
+          {info.items.map((row) => (
+            <div key={row.id} className="space-y-0.5">
+              <div className="flex justify-between gap-2 text-slate-300">
+                <span className="min-w-0 truncate font-medium">• {row.label}</span>
+              </div>
+              <div className="flex justify-between gap-2 pl-2 text-slate-400">
+                <span>Nearest chainage</span>
+                <span className="tabular-nums font-semibold text-amber-200">
+                  {row.nearestChainage ? `CH ${row.nearestChainage}` : "—"}
+                </span>
+              </div>
+              {row.distM != null && (
+                <div className="flex justify-between gap-2 pl-2 text-slate-500">
+                  <span>Offset</span>
+                  <span className="tabular-nums">{Math.round(row.distM)} m</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChainagePointsSummaryCard({
+  info,
+  compact = false,
+}: {
+  info: {
+    totalCount: number;
+    startChainage: string;
+    endChainage: string;
+  };
+  compact?: boolean;
+}) {
+  const accent = "#3b82f6";
+  const rows: Array<{ label: string; value: string }> = [
+    { label: "Total Chainage Count", value: info.totalCount.toLocaleString() },
+    { label: "Starting Chainage", value: `CH ${info.startChainage}` },
+    { label: "Last Chainage", value: `CH ${info.endChainage}` },
+  ];
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-blue-400/25 bg-blue-500/5 p-2"
+          : "rounded-xl border border-blue-400/35 bg-blue-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-blue-300">
+        Station ticks
+      </div>
+      <div className="space-y-1 text-[10px]">
+        {rows.map((row) => (
+          <div key={row.label} className="flex justify-between gap-2 text-slate-400">
+            <span className="shrink-0">• {row.label}</span>
+            <span className="text-right font-semibold tabular-nums text-slate-100">
+              {row.value}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LulcSummaryCard({
+  info,
+  compact = false,
+}: {
+  info: LulcSummaryInfo;
+  compact?: boolean;
+}) {
+  const accent = "#33a02c";
+  const order = ["Water", "Built-up", "Bareland", "Agriculture", "Forest"];
+  const classes = [...info.classes].sort(
+    (a, b) => order.indexOf(a.name) - order.indexOf(b.name),
+  );
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-emerald-400/25 bg-emerald-500/5 p-2"
+          : "rounded-xl border border-emerald-400/35 bg-emerald-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-emerald-300">
+        Updated LULC area (m²)
+      </div>
+      <div className="space-y-1 text-[10px]">
+        {classes.map((row) => (
+          <div key={row.name} className="flex items-center justify-between gap-2 text-slate-400">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span
+                className="h-2 w-2 shrink-0 rounded-sm"
+                style={{ backgroundColor: row.color }}
+              />
+              <span className="truncate">• {row.name}</span>
+            </span>
+            <span className="tabular-nums font-semibold text-slate-100">
+              {row.areaM2.toLocaleString()} m²
+            </span>
+          </div>
+        ))}
+        <div className="flex justify-between gap-2 border-t border-white/10 pt-1.5 text-slate-300">
+          <span className="font-semibold">• TOTAL</span>
+          <span className="tabular-nums font-semibold text-white">
+            {info.totalAreaM2.toLocaleString()} m²
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RailwayLinesSummaryCard({
+  info,
+  compact = false,
+}: {
+  info: RailwayLinesSummary;
+  compact?: boolean;
+}) {
+  const accent = "#e2e8f0";
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-slate-400/25 bg-slate-500/5 p-2"
+          : "rounded-xl border border-slate-400/35 bg-slate-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-slate-300">
+        Track centreline
+      </div>
+      <div className="space-y-1 text-[10px]">
+        <div className="flex justify-between gap-2 text-slate-400">
+          <span>• Total Segments</span>
+          <span className="tabular-nums font-semibold text-slate-100">
+            {info.segmentCount.toLocaleString()}
+          </span>
+        </div>
+        <div className="flex justify-between gap-2 text-slate-400">
+          <span>• Approx. Length</span>
+          <span className="tabular-nums font-semibold text-slate-100">
+            {info.lengthKm.toFixed(1)} km
+          </span>
+        </div>
+        <div className="flex justify-between gap-2 text-slate-400">
+          <span>• Named Routes</span>
+          <span className="tabular-nums font-semibold text-slate-100">{info.namedRoutes}</span>
+        </div>
+        <div className="flex justify-between gap-2 text-slate-400">
+          <span>• Main Usage</span>
+          <span className="tabular-nums font-semibold text-slate-100">{info.mainUsageCount}</span>
+        </div>
+        <div className="flex justify-between gap-2 text-slate-400">
+          <span>• Electrified</span>
+          <span className="tabular-nums font-semibold text-slate-100">{info.electrifiedCount}</span>
+        </div>
+        {info.topRoutes.length > 0 && (
+          <div className="border-t border-white/10 pt-1.5 space-y-1">
+            {info.topRoutes.map((row) => (
+              <div key={row.name} className="flex justify-between gap-2 text-slate-400">
+                <span className="min-w-0 truncate">• {row.name}</span>
+                <span className="shrink-0 tabular-nums font-semibold text-slate-100">
+                  {row.count}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RailwayStationsSummaryCard({
+  info,
+  compact = false,
+}: {
+  info: RailwayStationsSummary;
+  compact?: boolean;
+}) {
+  const accent = "#f97316";
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-orange-400/25 bg-orange-500/5 p-2"
+          : "rounded-xl border border-orange-400/35 bg-orange-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-orange-300">
+        Station locations
+      </div>
+      <div className="space-y-1 text-[10px]">
+        <div className="flex justify-between gap-2 text-slate-400">
+          <span>• Total Stations</span>
+          <span className="tabular-nums font-semibold text-slate-100">{info.count}</span>
+        </div>
+        <div className="border-t border-white/10 pt-1.5 space-y-1 max-h-40 overflow-y-auto">
+          {info.names.map((name) => (
+            <div key={name} className="text-slate-400">
+              • {name}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RailwayPlatformsSummaryCard({
+  info,
+  compact = false,
+}: {
+  info: RailwayPlatformsSummary;
+  compact?: boolean;
+}) {
+  const accent = "#38bdf8";
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-sky-400/25 bg-sky-500/5 p-2"
+          : "rounded-xl border border-sky-400/35 bg-sky-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-sky-300">
+        Platform footprints
+      </div>
+      <div className="space-y-1 text-[10px]">
+        <div className="flex justify-between gap-2 text-slate-400">
+          <span>• Total Platforms</span>
+          <span className="tabular-nums font-semibold text-slate-100">{info.count}</span>
+        </div>
+        <div className="flex justify-between gap-2 text-slate-400">
+          <span>• Named Platforms</span>
+          <span className="tabular-nums font-semibold text-slate-100">{info.namedCount}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RoadNetworkSummaryCard({
+  data,
+  compact = false,
+}: {
+  data: RoadNetworkData;
+  compact?: boolean;
+}) {
+  const accent = "#f59e0b";
+  const rows = data.highway_counts.slice(0, 10);
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-amber-400/25 bg-amber-500/5 p-2"
+          : "rounded-xl border border-amber-400/35 bg-amber-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-amber-300">
+        Within 1 km buffer
+      </div>
+      <div className="space-y-1 text-[10px]">
+        <div className="flex justify-between gap-2 text-slate-400">
+          <span className="shrink-0">• Total Segments</span>
+          <span className="text-right font-semibold tabular-nums text-slate-100">
+            {data.count.toLocaleString()}
+          </span>
+        </div>
+        <div className="flex justify-between gap-2 text-slate-400">
+          <span className="shrink-0">• Road Classes</span>
+          <span className="text-right font-semibold tabular-nums text-slate-100">
+            {data.highway_counts.length}
+          </span>
+        </div>
+        <div className="border-t border-white/10 pt-1.5 space-y-1">
+          {rows.map((row) => {
+            const s = highwayStyle(row.highway);
+            return (
+              <div key={row.highway} className="flex items-center justify-between gap-2 text-slate-400">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span
+                    className="h-0.5 w-3 shrink-0 rounded-full"
+                    style={{ backgroundColor: s.color }}
+                  />
+                  <span className="truncate">• {s.label}</span>
+                </span>
+                <span className="tabular-nums font-semibold text-slate-100">{row.count}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TreesSummaryCard({
   info,
   compact = false,
@@ -3638,6 +4438,21 @@ function ProjectAlignmentCard({
     { label: "Service Roads", value: `${info.serviceRoadsKm.toFixed(3)} km` },
     { label: "Start Chainage", value: `CH ${formatChainage(info.startChainageKm)}` },
     { label: "End Chainage", value: `CH ${formatChainage(info.endChainageKm)}` },
+    {
+      label: "Square Meters (m²)",
+      value: info.areaM2.toLocaleString(undefined, {
+        minimumFractionDigits: 3,
+        maximumFractionDigits: 3,
+      }),
+    },
+    { label: "Square Kilometers (km²)", value: `${info.areaKm2.toFixed(4)} km²` },
+    {
+      label: "Acres",
+      value: `${info.areaAcres.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })} acres`,
+    },
   ];
 
   return (
@@ -4090,6 +4905,86 @@ function CursorTracker({ onMove }: { onMove: (c: [number, number]) => void }) {
   useMapEvents({
     mousemove: (e) => onMove([e.latlng.lat, e.latlng.lng]),
   });
+  return null;
+}
+
+/**
+ * Map-container mousemove proximity hover.
+ * preferCanvas puts a full-size canvas over SVG paths, so CircleMarker mouseover never fires.
+ */
+function GroundScourHoverBridge({
+  points,
+  enabled,
+  onHover,
+}: {
+  points: GroundScourPoint[];
+  enabled: boolean;
+  onHover: (
+    point: GroundScourPoint | null,
+    cursor: { x: number; y: number } | null,
+  ) => void;
+}) {
+  const map = useMap();
+  const onHoverRef = useRef(onHover);
+  onHoverRef.current = onHover;
+  const pointsRef = useRef(points);
+  pointsRef.current = points;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  const lastIdRef = useRef<string | null>(null);
+
+  useMapEvents({
+    mousemove(e) {
+      if (!enabledRef.current) {
+        if (lastIdRef.current != null) {
+          lastIdRef.current = null;
+          onHoverRef.current(null, null);
+        }
+        return;
+      }
+      const pts = pointsRef.current;
+      if (!pts.length) return;
+
+      const mouse = map.mouseEventToContainerPoint(e.originalEvent);
+      const thresholdPx = 18;
+      let best: GroundScourPoint | null = null;
+      let bestDist = thresholdPx;
+
+      for (const p of pts) {
+        if (!Number.isFinite(p.latitude) || !Number.isFinite(p.longitude)) continue;
+        const pt = map.latLngToContainerPoint(L.latLng(p.latitude, p.longitude));
+        const dx = pt.x - mouse.x;
+        const dy = pt.y - mouse.y;
+        const d = Math.hypot(dx, dy);
+        if (d < bestDist) {
+          bestDist = d;
+          best = p;
+        }
+      }
+
+      const oe = e.originalEvent;
+      if (best) {
+        lastIdRef.current = best.id;
+        onHoverRef.current(best, { x: oe.clientX, y: oe.clientY });
+      } else if (lastIdRef.current != null) {
+        lastIdRef.current = null;
+        onHoverRef.current(null, null);
+      }
+    },
+    mouseout() {
+      if (lastIdRef.current == null) return;
+      lastIdRef.current = null;
+      onHoverRef.current(null, null);
+    },
+  });
+
+  useEffect(() => {
+    if (!enabled && lastIdRef.current != null) {
+      lastIdRef.current = null;
+      onHoverRef.current(null, null);
+    }
+  }, [enabled]);
+
   return null;
 }
 

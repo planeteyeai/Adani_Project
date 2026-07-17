@@ -92,7 +92,7 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
   { id: "alignment", name: "Project Alignment", description: "Plan & profile centreline and lanes", group: "Alignment & Markers", color: "#c026d3" },
   { id: "markers", name: "Chainage Points", description: "Thin station ticks with chainage ID labels", group: "Alignment & Markers", color: "#3b82f6" },
   { id: "toll_plazas", name: "Toll Plaza Locations", description: "Toll plaza markers from KMZ", group: "Alignment & Markers", color: "#f59e0b" },
-  { id: "road_categories", name: "Road Categories", description: "Lane configuration (2/6/8-lane)", group: "Alignment & Markers", color: "#22c55e" },
+  { id: "road_categories", name: "Road Categories", description: "Lane / TCS configuration along the corridor", group: "Alignment & Markers", color: "#22c55e" },
   {
     id: "road_network",
     name: "Road Network (1 km buffer)",
@@ -218,7 +218,6 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
     group: "Social Impact",
     color: "#ef4444",
   },
-
   // Analysis
   {
     id: "flood",
@@ -226,6 +225,13 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
     description: "Satellite water & inundation extent over time (2015–2026)",
     group: "Analysis",
     color: "#0ea5e9",
+  },
+  {
+    id: "ground_scour",
+    name: "Predictive_Bridge_Scour_Analysis",
+    description: "Design HFL & predictive bridge scour analysis along the corridor",
+    group: "Analysis",
+    color: "#f43f5e",
   },
   { id: "corridor", name: "RoW Corridor Buffer", description: "Right-of-way influence buffer", group: "Analysis", color: "#38e1c6" },
   { id: "slope", name: "Slope Heat (sim)", description: "Simulated slope severity along route", group: "Analysis", color: "#f97316" },

@@ -96,7 +96,7 @@ export default function FloodTimeSeriesPanel({
 
   return (
     <div
-      className="shrink-0 border-t border-white/10 bg-ink-900/95 backdrop-blur-xl"
+      className="max-h-[42vh] shrink-0 overflow-hidden border-t border-white/10 bg-ink-900/95 backdrop-blur-xl"
       role="region"
       aria-label="Flood water time series"
     >

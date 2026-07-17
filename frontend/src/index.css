@@ -104,18 +104,26 @@ body {
   border: none !important;
 }
 
-/* Leaflet tooltips */
-.geovision-tooltip.leaflet-tooltip {
-  background: rgba(10, 17, 32, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+/* Hover data cards (e.g. ground scour points) */
+.geovision-hover-card.leaflet-tooltip {
+  background: rgba(10, 17, 32, 0.96);
+  border: 1px solid rgba(244, 63, 94, 0.35);
   color: #e6edf7;
-  border-radius: 8px;
-  font-size: 12px;
-  padding: 6px 10px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  border-radius: 12px;
+  padding: 0;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  max-width: 320px;
+  white-space: normal;
 }
-.geovision-tooltip.leaflet-tooltip-top::before {
-  border-top-color: rgba(10, 17, 32, 0.92);
+.geovision-hover-card.leaflet-tooltip-top::before {
+  border-top-color: rgba(10, 17, 32, 0.96);
+}
+.geovision-hover-card .geovision-popup__body {
+  padding: 10px 12px;
+}
+.geovision-hover-card .geovision-popup__rows {
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 /* Permanent map feature labels (e.g. railway platforms) */

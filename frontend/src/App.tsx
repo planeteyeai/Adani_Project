@@ -6,6 +6,7 @@ import Landing from "./pages/Landing";
 import MapExplorer from "./pages/MapExplorer";
 import Dashboard from "./pages/Dashboard";
 import Projects from "./pages/Projects";
+import { TopBarWeatherProvider } from "./lib/topBarWeather";
 
 function ScrollToHash() {
   const { hash, pathname } = useLocation();
@@ -24,16 +25,19 @@ export default function App() {
   const { pathname } = useLocation();
   const isExplorer = pathname === "/explorer";
   return (
-    <div className="min-h-screen">
-      <ScrollToHash />
-      <Navbar />
-      <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route path="/explorer" element={<MapExplorer />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/projects" element={<Projects />} />
-      </Routes>
-      {!isExplorer && <Footer />}
-    </div>
+    <TopBarWeatherProvider>
+      <div className={isExplorer ? "h-dvh overflow-hidden" : "min-h-screen"}>
+        <ScrollToHash />
+        <Navbar />
+        <Routes>
+          <Route path="/" element={<Landing />} />
+          <Route path="/explorer" element={<MapExplorer />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/projects" element={<Projects />} />
+          <Route path="/reports" element={<Dashboard />} />
+        </Routes>
+        {!isExplorer && <Footer />}
+      </div>
+    </TopBarWeatherProvider>
   );
 }

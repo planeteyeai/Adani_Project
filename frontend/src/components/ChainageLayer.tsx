@@ -10,7 +10,15 @@ type StationPoint = {
   lon: number;
 };
 
-/** Label / tick density by zoom (metres between shown stations). */
+type PreparedStation = {
+  name: string;
+  lat: number;
+  lon: number;
+  /** Absolute chainage in metres along the corridor. */
+  chainageM: number;
+};
+
+/** Minimum spacing between shown labels by zoom (metres along chainage). */
 function chainageStepM(zoom: number): number {
   if (zoom >= 17) return 20;
   if (zoom >= 16) return 50;
@@ -20,8 +28,78 @@ function chainageStepM(zoom: number): number {
   return 1000;
 }
 
-const MAX_LABELS = 80;
-const MAX_TICKS = 200;
+function maxLabelsForZoom(zoom: number): number {
+  if (zoom >= 16) return 220;
+  if (zoom >= 15) return 160;
+  if (zoom >= 14) return 120;
+  return 90;
+}
+
+const MAX_TICKS = 400;
+
+/**
+ * Thin by unique chainage value, but keep every marker at a kept chainage
+ * (LHS/RHS duplicates are preserved).
+ */
+function thinStations(
+  stations: PreparedStation[],
+  stepM: number,
+  maxLabels: number,
+): PreparedStation[] {
+  if (!stations.length) return [];
+  if (stepM <= 0) return stations.slice(0, maxLabels);
+
+  const uniqueChainages: number[] = [];
+  for (const s of stations) {
+    if (
+      !uniqueChainages.length ||
+      uniqueChainages[uniqueChainages.length - 1] !== s.chainageM
+    ) {
+      uniqueChainages.push(s.chainageM);
+    }
+  }
+
+  const keptChainages = new Set<number>();
+  let lastKept = -Infinity;
+  for (let i = 0; i < uniqueChainages.length; i++) {
+    const ch = uniqueChainages[i];
+    const isFirst = i === 0;
+    const isLast = i === uniqueChainages.length - 1;
+    const isSecondLast = i === uniqueChainages.length - 2;
+    const wholeKm = ch % 1000 === 0;
+    const farEnough = ch - lastKept >= stepM - 0.5;
+
+    if (stepM >= 1000 && !isFirst && !isLast && !isSecondLast && !wholeKm) continue;
+
+    if (
+      isFirst ||
+      isLast ||
+      isSecondLast ||
+      farEnough ||
+      (wholeKm && ch - lastKept >= stepM * 0.5)
+    ) {
+      keptChainages.add(ch);
+      lastKept = ch;
+    }
+  }
+
+  // Cap unique chainages while preserving start / second-last / last.
+  if (keptChainages.size > maxLabels) {
+    const ordered = uniqueChainages.filter((ch) => keptChainages.has(ch));
+    const capped = new Set<number>();
+    capped.add(ordered[0]);
+    if (ordered.length >= 2) capped.add(ordered[ordered.length - 1]);
+    if (ordered.length >= 3) capped.add(ordered[ordered.length - 2]);
+    const middleEnd = Math.max(1, ordered.length - 2);
+    const stride = Math.ceil((middleEnd - 1) / Math.max(1, maxLabels - 3));
+    for (let i = stride; i < middleEnd; i += stride) {
+      capped.add(ordered[i]);
+    }
+    return stations.filter((s) => capped.has(s.chainageM));
+  }
+
+  return stations.filter((s) => keptChainages.has(s.chainageM));
+}
 
 /**
  * High-performance chainage overlay:
@@ -63,19 +141,22 @@ export default function ChainageLayer({
     [ticks],
   );
 
-  const preparedStations = useMemo(
-    () =>
-      stations.map((p) => {
-        const parts = p.name.split("+");
-        return {
-          name: p.name,
-          lat: p.lat,
-          lon: p.lon,
-          metres: Number(parts[1] ?? 0),
-        };
-      }),
-    [stations],
-  );
+  const preparedStations = useMemo(() => {
+    const list: PreparedStation[] = [];
+    for (const p of stations) {
+      const m = p.name.match(/^(\d+)\+(\d+)$/);
+      if (!m) continue;
+      const km = Number(m[1]);
+      const metres = Number(m[2]);
+      list.push({
+        name: p.name,
+        lat: p.lat,
+        lon: p.lon,
+        chainageM: km * 1000 + metres,
+      });
+    }
+    return list.sort((a, b) => a.chainageM - b.chainageM);
+  }, [stations]);
 
   useEffect(() => {
     if (!showTicks && !showLabels) return;
@@ -88,11 +169,11 @@ export default function ChainageLayer({
     const rebuild = () => {
       group.clearLayers();
       const zoom = map.getZoom();
-      const bounds = map.getBounds().pad(0.2);
+      const bounds = map.getBounds().pad(0.25);
       const step = chainageStepM(zoom);
 
       if (showTicks) {
-        const tickStride = zoom >= 16 ? 1 : zoom >= 15 ? 2 : zoom >= 14 ? 3 : zoom >= 13 ? 6 : 12;
+        const tickStride = zoom >= 16 ? 1 : zoom >= 15 ? 2 : zoom >= 14 ? 3 : zoom >= 13 ? 5 : 10;
         let drawn = 0;
         for (let i = 0; i < preparedTicks.length; i++) {
           if (drawn >= MAX_TICKS) break;
@@ -113,15 +194,8 @@ export default function ChainageLayer({
       }
 
       if (showLabels) {
-        let list = preparedStations.filter((s) => {
-          if (!bounds.contains([s.lat, s.lon])) return false;
-          if (step >= 1000) return s.metres === 0;
-          return s.metres % step === 0;
-        });
-        if (list.length > MAX_LABELS) {
-          const stride = Math.ceil(list.length / MAX_LABELS);
-          list = list.filter((_, i) => i % stride === 0);
-        }
+        const inView = preparedStations.filter((s) => bounds.contains([s.lat, s.lon]));
+        const list = thinStations(inView, step, maxLabelsForZoom(zoom));
         for (const s of list) {
           const icon = L.divIcon({
             className: `geovision-chainage-icon${blink ? " active-layer-marker-blink" : ""}`,

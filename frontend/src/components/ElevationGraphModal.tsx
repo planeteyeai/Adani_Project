@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Download } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { downloadElevationKml } from "../lib/elevationKml";
 import { downloadElevationExcel } from "../lib/elevationExcel";
 
@@ -19,12 +19,22 @@ export type ElevationScrubSample = {
   lhs?: ElevationPoint;
   centerline?: ElevationPoint;
   rhs?: ElevationPoint;
+  hfl?: { chainage_km: number; design_hfl_continuous_m: number };
   /** True while the user is actively dragging the scrubber. */
   dragging?: boolean;
 };
 
+export type DesignHflPoint = {
+  id: number;
+  chainage_km: number;
+  latitude: number;
+  longitude: number;
+  design_hfl_continuous_m: number;
+};
+
 type Props = {
   points: ElevationPoint[];
+  hflPoints?: DesignHflPoint[];
   onClose: () => void;
   onPointClick?: (point: ElevationPoint) => void;
   /** Fired while the vertical scrubber moves — used to sync the map cross-section. */
@@ -64,9 +74,12 @@ function nearestPoint(pts: ElevationPoint[], chainage: number): ElevationPoint |
   return Math.abs(a.chainage - chainage) <= Math.abs(b.chainage - chainage) ? a : b;
 }
 
+const HFL_COLOR = "#38bdf8";
+
 /** Chainage vs ground elevation profile with a draggable vertical scrubber. */
 export default function ElevationGraphModal({
   points,
+  hflPoints = [],
   onClose,
   onPointClick,
   onScrub,
@@ -74,6 +87,7 @@ export default function ElevationGraphModal({
   exportPoints,
 }: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
   const pendingXRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -94,6 +108,22 @@ export default function ElevationGraphModal({
       .filter((p) => !Number.isNaN(p.chainage) && !Number.isNaN(p.elevation))
       .sort((a, b) => a.chainage - b.chainage || a.branch.localeCompare(b.branch));
   }, [points]);
+
+  const normalizedHfl = useMemo(() => {
+    if (!hflPoints?.length) return [];
+    return [...hflPoints]
+      .map((p) => ({
+        chainage_km: Number(p.chainage_km),
+        design_hfl_continuous_m: Number(p.design_hfl_continuous_m),
+        latitude: p.latitude,
+        longitude: p.longitude,
+        id: p.id,
+      }))
+      .filter(
+        (p) => !Number.isNaN(p.chainage_km) && !Number.isNaN(p.design_hfl_continuous_m),
+      )
+      .sort((a, b) => a.chainage_km - b.chainage_km);
+  }, [hflPoints]);
 
   const series = useMemo(() => {
     const byBranch = new Map<string, typeof normalized>();
@@ -142,11 +172,21 @@ export default function ElevationGraphModal({
   const buildSample = (ch: number, dragging: boolean): ElevationScrubSample | null => {
     const center = nearestPoint(centerlinePts, ch);
     if (!center) return null;
+    const hfl = nearestPoint(
+      normalizedHfl.map((p) => ({
+        chainage: p.chainage_km,
+        elevation: p.design_hfl_continuous_m,
+      })),
+      center.chainage,
+    );
     return {
       chainage: center.chainage,
       centerline: center,
       lhs: nearestPoint(lhsPts, center.chainage),
       rhs: nearestPoint(rhsPts, center.chainage),
+      hfl: hfl
+        ? { chainage_km: hfl.chainage, design_hfl_continuous_m: hfl.elevation }
+        : undefined,
       dragging,
     };
   };
@@ -190,6 +230,74 @@ export default function ElevationGraphModal({
     const next = buildSample(ch, dragging);
     if (next) onScrubRef.current?.(next);
   };
+
+  const scrubIndex = useMemo(() => {
+    if (scrubChainage == null || !centerlinePts.length) return -1;
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < centerlinePts.length; i++) {
+      const d = Math.abs(centerlinePts[i].chainage - scrubChainage);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    return best;
+  }, [scrubChainage, centerlinePts]);
+
+  const canStepLeft = scrubIndex > 0;
+  const canStepRight = scrubIndex >= 0 && scrubIndex < centerlinePts.length - 1;
+
+  const scrollScrubberIntoView = (ch: number) => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const x =
+      paddingLeft +
+      ((ch - minX) / Math.max(1e-9, maxX - minX)) * (width - paddingLeft - paddingRight);
+    const viewW = scroller.clientWidth;
+    const target = x - viewW / 2;
+    scroller.scrollTo({ left: Math.max(0, target), behavior: "smooth" });
+  };
+
+  const stepScrub = (dir: -1 | 1) => {
+    if (!centerlinePts.length) return;
+    const idx =
+      scrubIndex >= 0
+        ? scrubIndex
+        : Math.floor(centerlinePts.length / 2);
+    const nextIdx = Math.max(0, Math.min(centerlinePts.length - 1, idx + dir));
+    const next = centerlinePts[nextIdx];
+    if (!next) return;
+    applyScrub(next.chainage, false);
+    onPointClickRef.current?.(next);
+    scrollScrubberIntoView(next.chainage);
+  };
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        stepScrub(-1);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        stepScrub(1);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [centerlinePts, scrubIndex, minX, maxX, width]);
 
   const scheduleScrub = (clientX: number) => {
     pendingXRef.current = clientX;
@@ -245,8 +353,14 @@ export default function ElevationGraphModal({
 
   if (!normalized.length || scrubChainage == null || !sample) return null;
 
-  const minY = Math.min(...normalized.map((p) => p.elevation));
-  const maxY = Math.max(...normalized.map((p) => p.elevation));
+  const minY = Math.min(
+    ...normalized.map((p) => p.elevation),
+    ...(normalizedHfl.length ? normalizedHfl.map((p) => p.design_hfl_continuous_m) : []),
+  );
+  const maxY = Math.max(
+    ...normalized.map((p) => p.elevation),
+    ...(normalizedHfl.length ? normalizedHfl.map((p) => p.design_hfl_continuous_m) : []),
+  );
   const avgY = normalized.reduce((sum, p) => sum + p.elevation, 0) / normalized.length;
 
   const tickPoints =
@@ -272,7 +386,7 @@ export default function ElevationGraphModal({
 
   return (
     <div
-      className="shrink-0 border-t border-white/10 bg-ink-900/95 backdrop-blur-xl"
+      className="max-h-[42vh] shrink-0 overflow-hidden border-t border-white/10 bg-ink-900/95 backdrop-blur-xl"
       role="region"
       aria-label="Ground elevation profile"
     >
@@ -288,6 +402,15 @@ export default function ElevationGraphModal({
                 <span style={{ color: s.color }}>{s.label}</span>
               </span>
             ))}
+            {normalizedHfl.length > 0 && (
+              <span className="inline-flex items-center gap-1">
+                <span
+                  className="h-0.5 w-3 rounded border-t border-dashed"
+                  style={{ borderColor: HFL_COLOR, background: HFL_COLOR }}
+                />
+                <span style={{ color: HFL_COLOR }}>Design HFL (continuous)</span>
+              </span>
+            )}
             <span className="text-slate-500">·</span>
             <span>
               Min <span className="text-brand-400">{minY.toFixed(0)}</span>
@@ -341,6 +464,28 @@ export default function ElevationGraphModal({
 
         {/* Live scrub readout — position = centreline Ch; heights = LHS / Centre / RHS */}
         <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[10px]">
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => stepScrub(-1)}
+              disabled={!canStepLeft}
+              title="Previous chainage (←)"
+              aria-label="Previous chainage"
+              className="grid h-6 w-6 place-items-center rounded border border-white/15 bg-white/5 text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => stepScrub(1)}
+              disabled={!canStepRight}
+              title="Next chainage (→)"
+              aria-label="Next chainage"
+              className="grid h-6 w-6 place-items-center rounded border border-white/15 bg-white/5 text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
           <span className="rounded bg-white/10 px-2 py-0.5 font-semibold text-white">
             Centre Ch {sample.chainage.toFixed(3)} km
           </span>
@@ -353,9 +498,18 @@ export default function ElevationGraphModal({
           <span className="rounded px-2 py-0.5 font-semibold" style={{ background: "#f59e0b20", color: "#fbbf24" }}>
             RHS {sample.rhs != null ? `${sample.rhs.elevation.toFixed(2)} m` : "—"}
           </span>
+          {sample.hfl && (
+            <span
+              className="rounded px-2 py-0.5 font-semibold"
+              style={{ background: "#38bdf820", color: "#7dd3fc" }}
+            >
+              Design HFL {sample.hfl.design_hfl_continuous_m.toFixed(2)} m
+            </span>
+          )}
+          <span className="hidden text-slate-500 sm:inline">← → keys</span>
         </div>
 
-        <div className="overflow-x-auto rounded bg-ink-950">
+        <div ref={scrollRef} className="overflow-x-auto rounded bg-ink-950">
           <svg
             ref={svgRef}
             width={width}
@@ -467,6 +621,21 @@ export default function ElevationGraphModal({
               />
             ))}
 
+            {normalizedHfl.length > 1 && (
+              <polyline
+                fill="none"
+                stroke={HFL_COLOR}
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                points={normalizedHfl
+                  .map((p) => `${xScale(p.chainage_km)},${yScale(p.design_hfl_continuous_m)}`)
+                  .join(" ")}
+                style={{ pointerEvents: "none" }}
+              />
+            )}
+
             {/* Dots sit on the centreline scrubber X; Y = each branch elevation at that Ch */}
             {sample.lhs && (
               <circle
@@ -496,6 +665,17 @@ export default function ElevationGraphModal({
                 cy={yScale(sample.rhs.elevation)}
                 r={3.5}
                 fill="#f59e0b"
+                stroke="#fff"
+                strokeWidth={1.5}
+                style={{ pointerEvents: "none" }}
+              />
+            )}
+            {sample.hfl && (
+              <circle
+                cx={scrubX}
+                cy={yScale(sample.hfl.design_hfl_continuous_m)}
+                r={3.5}
+                fill={HFL_COLOR}
                 stroke="#fff"
                 strokeWidth={1.5}
                 style={{ pointerEvents: "none" }}
