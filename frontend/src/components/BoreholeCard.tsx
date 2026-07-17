@@ -15,7 +15,7 @@ const COMP = [
 const ENG = [
   { key: "CBR (%)", label: "CBR", unit: "(%)", color: "#3fbf6f" },
   { key: "SBC (T/m²)", label: "SBC", unit: "(T/m²)", color: "#a855f7" },
-  { key: "UCS (kg/cm²)", label: "UCS", unit: "(kg/cm²)", color: "#ef4444" },
+  { key: "Bulk Density (g/cc)", label: "Bulk Density", unit: "(g/cc)", color: "#ef4444" },
 ] as const;
 
 function num(v: unknown): number | null {
@@ -57,6 +57,14 @@ export default function BoreholeCard({
   const layers = borehole.layers;
   const n = layers.length;
   const maxDepth = n ? depthStart(layers[n - 1]) + 1 : 10;
+  // Groundwater table is recorded once per location (usually on the first layer row).
+  const groundWaterTable = (() => {
+    for (const l of layers) {
+      const v = l["Ground water table(m)"];
+      if (v != null && String(v).trim() !== "") return String(v).trim();
+    }
+    return null;
+  })();
   void columns;
 
   useEffect(() => {
@@ -89,6 +97,14 @@ export default function BoreholeCard({
   };
 
   const isFs = fullscreen;
+
+  // Fit the full profile (e.g. 40 m) on screen: shrink rows when there are many layers.
+  const baseRowH = isFs ? 44 : ROW_H;
+  const availH = Math.max(
+    320,
+    (isFs ? window.innerHeight : window.innerHeight * 0.92) - 300,
+  );
+  const rowH = Math.max(15, Math.min(baseRowH, Math.floor(availH / Math.max(n, 1))));
 
   const card = (
     <div
@@ -144,21 +160,30 @@ export default function BoreholeCard({
 
         <div className="min-h-0 flex-1 overflow-auto">
           {/* Meta strip */}
-          <div className="mx-6 mt-4 grid grid-cols-3 gap-4 rounded-xl border border-white/10 bg-white/5 px-5 py-3">
+          <div className="mx-6 mt-4 grid grid-cols-2 gap-4 rounded-xl border border-white/10 bg-white/5 px-5 py-3 sm:grid-cols-4">
             <Meta label="Latitude" value={borehole.lat != null ? borehole.lat.toFixed(6) : "—"} />
             <Meta label="Longitude" value={borehole.lon != null ? borehole.lon.toFixed(6) : "—"} />
+            <Meta label="Ground Water Table" value={groundWaterTable ? `${groundWaterTable} m` : "—"} />
             <Meta label="Depth Explored" value={`${n} m`} />
           </div>
 
           {/* Body */}
           <div
-            className={`grid grid-cols-1 gap-6 p-6 ${
-              isFs ? "min-h-[calc(100dvh-10rem)] lg:grid-cols-3 lg:items-stretch" : "lg:grid-cols-[1fr_0.9fr_1.35fr]"
+            className={`grid grid-cols-1 gap-4 p-5 ${
+              isFs
+                ? "min-h-[calc(100dvh-10rem)] lg:grid-cols-[0.8fr_1.25fr_1.1fr] lg:items-stretch"
+                : "lg:grid-cols-[0.8fr_1.25fr_1.1fr] lg:items-start"
             }`}
           >
-            <Composition layers={layers} rowH={isFs ? 44 : ROW_H} />
-            <Engineering layers={layers} maxDepth={maxDepth} rowH={isFs ? 44 : ROW_H} />
-            <SoilProfile layers={layers} rowH={isFs ? 44 : ROW_H} />
+            <section className="min-w-0 rounded-xl border border-white/10 bg-white/[0.025] p-3">
+              <Composition layers={layers} rowH={rowH} />
+            </section>
+            <section className="min-w-0 rounded-xl border border-white/10 bg-white/[0.025] p-3">
+              <Engineering layers={layers} maxDepth={maxDepth} rowH={rowH} />
+            </section>
+            <section className="min-w-0 rounded-xl border border-white/10 bg-white/[0.025] p-3">
+              <SoilProfile layers={layers} rowH={rowH} />
+            </section>
           </div>
         </div>
       </div>
@@ -188,21 +213,31 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 function SoilProfile({ layers, rowH = ROW_H }: { layers: SoilLayer[]; rowH?: number }) {
   return (
     <div>
-      <div className="mb-2 grid grid-cols-[38px_1fr_38px] items-end gap-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+      <div className="mb-2 grid grid-cols-[48px_minmax(0,1fr)_58px] items-end gap-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
         <div>Depth (m)</div>
         <div>Soil Description</div>
         <div className="text-right">USCS</div>
       </div>
-      <div className="grid grid-cols-[38px_1fr_38px] gap-x-1">
+      <div className="grid grid-cols-[48px_minmax(0,1fr)_58px] gap-x-2">
         {layers.map((layer, i) => (
           <div key={i} className="contents">
-            <div className="flex items-center text-[11px] text-slate-400" style={{ height: rowH }}>
+            <div
+              className="flex items-center whitespace-nowrap text-[10px] text-slate-400"
+              style={{ height: rowH }}
+            >
               {String(layer["Depth (m)"])}
             </div>
-            <div className="flex items-center pr-1 text-[11px] leading-tight text-slate-300" style={{ height: rowH }}>
+            <div
+              className="flex min-w-0 items-center truncate pr-1 text-[10px] leading-none text-slate-300"
+              style={{ height: rowH }}
+              title={String(layer["Remarks"] ?? "—")}
+            >
               {String(layer["Remarks"] ?? "—")}
             </div>
-            <div className="flex items-center justify-end text-[11px] font-semibold text-slate-200" style={{ height: rowH }}>
+            <div
+              className="flex items-center justify-end whitespace-nowrap text-[10px] font-semibold leading-none text-slate-200"
+              style={{ height: rowH }}
+            >
               {String(layer["Soil Class"] ?? "—")}
             </div>
           </div>
@@ -231,7 +266,10 @@ function Composition({ layers, rowH = ROW_H }: { layers: SoilLayer[]; rowH?: num
               {String(layer["Depth (m)"])}
             </div>
             <div className="flex items-center" style={{ height: rowH }}>
-              <div className="flex h-4 w-full overflow-hidden rounded-sm">
+              <div
+                className="flex w-full overflow-hidden rounded-sm"
+                style={{ height: Math.max(10, Math.min(16, rowH - 5)) }}
+              >
                 {COMP.map((c) => {
                   const v = num(layer[c.key]) ?? 0;
                   if (v <= 0) return null;
@@ -278,7 +316,12 @@ function Engineering({
 }) {
   const n = layers.length;
   const plotH = n * rowH;
-  const depthTicks = Array.from({ length: maxDepth + 1 }, (_, i) => i);
+  // Thin the ticks on deep profiles (e.g. 40 m) so labels stay legible.
+  const tickStep = maxDepth > 24 ? 5 : maxDepth > 12 ? 2 : 1;
+  const depthTicks = Array.from(
+    { length: Math.floor(maxDepth / tickStep) + 1 },
+    (_, i) => i * tickStep,
+  );
   const depthAxisW = 40;
   const colW = 118;
   const padX = 20;
@@ -398,6 +441,22 @@ function Engineering({
               {pts.map((p) => {
                 const label = Number.isInteger(p.v) ? String(p.v) : p.v.toFixed(2);
                 const labelOnRight = p.x < colX + colW * 0.55;
+                // Label every row is unreadable on deep (40 m) profiles — thin them.
+                const labelStep = rowH < 22 ? Math.ceil(22 / rowH) : 1;
+                const showLabel = p.i % labelStep === 0 || p.i === n - 1;
+                if (!showLabel) {
+                  return (
+                    <circle
+                      key={p.i}
+                      cx={p.x}
+                      cy={p.y}
+                      r={2.5}
+                      fill={prop.color}
+                      stroke="#0a1120"
+                      strokeWidth={1}
+                    />
+                  );
+                }
                 return (
                   <g key={p.i}>
                     <circle cx={p.x} cy={p.y} r={3.5} fill={prop.color} stroke="#0a1120" strokeWidth={1} />

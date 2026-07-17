@@ -63,16 +63,30 @@ export default function WeatherHud({
   const conditionLabel = weatherCodeLabel(current.weather_code);
 
   if (variant === "pill") {
+    const pillParts = [
+      tempLabel,
+      conditionLabel,
+      `${current.relative_humidity_2m}% hum`,
+      `${Math.round(current.wind_speed_10m)} km/h`,
+      `${rainChance}% rain`,
+      `UV ${current.uv_index.toFixed(1)}`,
+    ];
+
     return (
       <button
         type="button"
         onClick={onOpenDetails}
         title="Open full forecast"
-        className="flex max-w-[min(100vw-8rem,18rem)] items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white transition hover:border-white/20 hover:bg-white/10"
+        className="flex max-w-[min(100vw-10rem,36rem)] items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-white transition hover:border-white/20 hover:bg-white/10"
       >
-        <span className="shrink-0 font-medium">{tempLabel}</span>
-        <span className="text-white/35">·</span>
-        <span className="truncate text-white/85">{conditionLabel}</span>
+        <span className="truncate whitespace-nowrap">
+          {pillParts.map((part, i) => (
+            <span key={`${part}-${i}`}>
+              {i > 0 && <span className="mx-1.5 text-white/35">·</span>}
+              <span className={i === 0 ? "font-medium" : "text-white/85"}>{part}</span>
+            </span>
+          ))}
+        </span>
       </button>
     );
   }

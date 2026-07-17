@@ -59,7 +59,17 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import ElevationGraphModal, { type ElevationPoint, type ElevationScrubSample } from "../components/ElevationGraphModal";
+import ElevationGraphModal, {
+  type ElevationPoint,
+  type ElevationScrubSample,
+  type ElevationSeriesVisibility,
+  DEFAULT_ELEVATION_VISIBILITY,
+} from "../components/ElevationGraphModal";
+import RoadFormationGraphPanel, {
+  type RoadFormationScrubSample,
+  type RoadFormationSeriesVisibility,
+  DEFAULT_ROAD_FORMATION_VISIBILITY,
+} from "../components/RoadFormationGraphPanel";
 import BoreholeCard from "../components/BoreholeCard";
 import WeatherForecastModal from "../components/WeatherForecastModal";
 import BaseMapSwitcher from "../components/BaseMapSwitcher";
@@ -97,6 +107,13 @@ import {
   type GroundScourPoint,
   type GroundScourSummary,
 } from "../lib/groundScour";
+import {
+  fetchRoadFormation,
+  summarizeRoadFormation,
+  ROAD_FORMATION_BRANCH_COLORS,
+  type RoadFormationData,
+  type RoadFormationSummary,
+} from "../lib/roadFormation";
 import { fetchAffectedHouses, type AffectedHousesData } from "../lib/affectedHouses";
 import { fetchWaterBodies, fetchWaterways, type WaterBodiesData } from "../lib/waterBodies";
 import { fetchVillages, type VillagesData } from "../lib/villages";
@@ -221,6 +238,7 @@ const DEFAULT_OVERLAYS: Record<string, boolean> = {
   affected_houses: false,
   flood: false,
   ground_scour: false,
+  road_formation: false,
   corridor: false,
   slope: false,
 };
@@ -242,6 +260,13 @@ export default function MapExplorer() {
   const [baseId, setBaseId] = useState("google-satellite");
   const [opacity, setOpacity] = useState(0.7);
   const [showElevation, setShowElevation] = useState(false);
+  const [elevationVisibility, setElevationVisibility] =
+    useState<ElevationSeriesVisibility>(DEFAULT_ELEVATION_VISIBILITY);
+  const [showRoadFormationGraph, setShowRoadFormationGraph] = useState(false);
+  const [roadFormationVisibility, setRoadFormationVisibility] =
+    useState<RoadFormationSeriesVisibility>(DEFAULT_ROAD_FORMATION_VISIBILITY);
+  const [roadFormationScrub, setRoadFormationScrub] =
+    useState<RoadFormationScrubSample | null>(null);
   const [showWeather, setShowWeather] = useState(false);
   const topBarWeather = useTopBarWeather();
   const [elevationPoints, setElevationPoints] = useState<ElevationPoint[]>([]);
@@ -250,6 +275,7 @@ export default function MapExplorer() {
   const [affectedHouses, setAffectedHouses] = useState<AffectedHousesData | null>(null);
   const [elevatedScour, setElevatedScour] = useState<ElevatedScourData | null>(null);
   const [groundScour, setGroundScour] = useState<GroundScourData | null>(null);
+  const [roadFormation, setRoadFormation] = useState<RoadFormationData | null>(null);
   const [hoveredGroundScour, setHoveredGroundScour] = useState<GroundScourPoint | null>(null);
   const [groundScourCursor, setGroundScourCursor] = useState<{ x: number; y: number } | null>(null);
   const [waterBodies, setWaterBodies] = useState<WaterBodiesData | null>(null);
@@ -326,6 +352,7 @@ export default function MapExplorer() {
     fetchAffectedHouses().then(setAffectedHouses);
     fetchElevatedScour().then(setElevatedScour);
     fetchGroundScour().then(setGroundScour);
+    fetchRoadFormation().then(setRoadFormation);
     fetchWaterBodies().then(setWaterBodies);
     fetchWaterways().then(setWaterways);
     fetchVillages().then(setVillagesData);
@@ -353,6 +380,14 @@ export default function MapExplorer() {
       setGroundScourCursor(null);
     }
   }, [overlays.ground_scour]);
+
+  useEffect(() => {
+    setShowRoadFormationGraph(!!overlays.road_formation);
+    if (!overlays.road_formation) {
+      setRoadFormationScrub(null);
+      setRoadFormationVisibility(DEFAULT_ROAD_FORMATION_VISIBILITY);
+    }
+  }, [overlays.road_formation]);
 
   // Opening the flood overlay also opens the time-series panel
   useEffect(() => {
@@ -712,50 +747,25 @@ export default function MapExplorer() {
 
   const overlayGroupBadges = useMemo(() => {
     const badges: Record<string, string> = {};
-    if (alignmentSummary) {
-      badges["Alignment & Markers"] = `${alignmentSummary.totalLengthKm.toFixed(1)} km`;
+    for (const group of ANALYSIS_OVERLAY_GROUPS) {
+      const activeCount = ANALYSIS_OVERLAYS.filter(
+        (o) => o.group === group && overlays[o.id],
+      ).length;
+      if (activeCount > 0) badges[group] = String(activeCount);
     }
-    const utilityCount =
-      (transmissionLines?.count ?? 0) +
-      (substations?.count ?? 0) +
-      (transmissionTowers?.count ?? 0);
-    if (utilityCount) badges.Utilities = String(utilityCount);
-    if (structuresSummary?.total) {
-      badges["Schedule-B Structures"] = String(structuresSummary.total);
-    }
-    const corridorCount =
-      sbLines.elevated.length +
-      sbLines.service_roads.length +
-      sbLines.re_walls.length +
-      sbLines.drains.length +
-      sbLines.ramps.length +
-      sbLines.paved_shoulders.length;
-    if (corridorCount) badges["Schedule-B Corridor"] = String(corridorCount);
-    if (boreholes.length) badges.Geotechnical = String(boreholes.length);
-    badges.Environment = String(
-      ANALYSIS_OVERLAYS.filter((o) => o.group === "Environment").length,
-    );
-    const socialCount = (villagesData?.count ?? 0) + (affectedHouses?.count ?? 0);
-    if (socialCount) badges["Social Impact"] = String(socialCount);
-    badges.Analysis = String(ANALYSIS_OVERLAYS.filter((o) => o.group === "Analysis").length);
     return badges;
-  }, [
-    alignmentSummary,
-    transmissionLines,
-    substations,
-    transmissionTowers,
-    structuresSummary,
-    sbLines,
-    boreholes.length,
-    villagesData,
-    affectedHouses,
-  ]);
+  }, [overlays]);
 
   const treesSummary = useMemo(() => treesSummaryInfo(treesData), [treesData]);
 
   const groundScourSummary = useMemo(
     () => summarizeGroundScour(groundScour),
     [groundScour],
+  );
+
+  const roadFormationSummary = useMemo(
+    () => summarizeRoadFormation(roadFormation),
+    [roadFormation],
   );
 
   const lulcSummary = useMemo(() => lulcSummaryInfo(lulcData), [lulcData]);
@@ -836,6 +846,50 @@ export default function MapExplorer() {
       ),
     [elevationPoints],
   );
+
+  const roadFormationLines = useMemo(() => {
+    if (!roadFormation) return [];
+    const lines: Array<{
+      positions: [number, number, number][];
+      label: string;
+      color: string;
+    }> = [];
+
+    for (const branch of roadFormation.branches) {
+      if (
+        roadFormationVisibility[branch.id as keyof RoadFormationSeriesVisibility] ===
+        false
+      ) {
+        continue;
+      }
+      const color = ROAD_FORMATION_BRANCH_COLORS[branch.id] ?? "#f59e0b";
+      let segment: [number, number, number][] = [];
+      let previous: { lat: number; lon: number } | null = null;
+
+      for (const point of branch.points) {
+        if (
+          previous &&
+          haversineKm(previous.lat, previous.lon, point.lat, point.lon) > 0.15
+        ) {
+          if (segment.length > 1) {
+            lines.push({ positions: segment, label: branch.name, color });
+          }
+          segment = [];
+        }
+        segment.push([
+          point.lat,
+          point.lon,
+          point.formation_level_m ?? point.ground_elev_m ?? 0,
+        ]);
+        previous = point;
+      }
+
+      if (segment.length > 1) {
+        lines.push({ positions: segment, label: branch.name, color });
+      }
+    }
+    return lines;
+  }, [roadFormation, roadFormationVisibility]);
 
   const elevationMapPoints = useMemo(() => {
     return elevationMapSample(elevationPoints, 1)
@@ -1067,24 +1121,25 @@ export default function MapExplorer() {
         return null;
       };
 
-      const lhs = resolve(sample.lhs);
-      const center = resolve(sample.centerline);
-      const rhs = resolve(sample.rhs);
+      const lhs = elevationVisibility.lhs ? resolve(sample.lhs) : null;
+      const center = elevationVisibility.centerline ? resolve(sample.centerline) : null;
+      const rhs = elevationVisibility.rhs ? resolve(sample.rhs) : null;
       const section = [lhs, center, rhs].filter(
         (x): x is NonNullable<typeof x> => x != null,
       );
       setElevationCrossSection(section.length ? section : null);
 
-      if (center) {
+      const focusPt = center ?? lhs ?? rhs ?? resolve(sample.centerline);
+      if (focusPt) {
         setElevationFocus({
-          lat: center.lat,
-          lon: center.lon,
-          chainage: center.chainage,
-          elevation: center.elevation,
+          lat: focusPt.lat,
+          lon: focusPt.lon,
+          chainage: focusPt.chainage,
+          elevation: focusPt.elevation,
         });
       }
     },
-    [elevationPointIndex],
+    [elevationPointIndex, elevationVisibility],
   );
 
   return (
@@ -1469,6 +1524,29 @@ export default function MapExplorer() {
                         </div>
                       </div>
                     )}
+                    {group === "Analysis" && overlays.road_formation && roadFormationSummary && (
+                      <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2.5 text-xs text-slate-400">
+                        <div className="font-semibold text-amber-300">Road Formation Level</div>
+                        <div className="mt-1 space-y-0.5">
+                          <div>
+                            {roadFormationSummary.pointCount.toLocaleString()} points ·{" "}
+                            {roadFormationSummary.branchCount} lines (LHS / CL / RHS)
+                          </div>
+                          <div>
+                            Chainage {roadFormationSummary.fromKm?.toFixed(2) ?? "—"}–
+                            {roadFormationSummary.toKm?.toFixed(2) ?? "—"} km
+                          </div>
+                          <div>
+                            Formation {roadFormationSummary.formationMinM?.toFixed(1) ?? "—"}–
+                            {roadFormationSummary.formationMaxM?.toFixed(1) ?? "—"} m
+                          </div>
+                          <div>
+                            Ground {roadFormationSummary.groundMinM?.toFixed(1) ?? "—"}–
+                            {roadFormationSummary.groundMaxM?.toFixed(1) ?? "—"} m
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     {group === "Analysis" && overlays.slope && (
                       <div className="mt-3">
                         <SlopeLegend />
@@ -1510,6 +1588,7 @@ export default function MapExplorer() {
             project={project}
             overlays={overlays}
             showElevation={showElevation}
+            elevationVisibility={elevationVisibility}
             lineFeatures={lineFeatures}
             elevationPoints={elevationPoints}
             contours1m={contours1m}
@@ -1556,6 +1635,7 @@ export default function MapExplorer() {
               lon: b.lon as number,
               name: b.name,
             }))}
+            roadFormationLines={roadFormationLines}
           />
         ) : (
         <MapContainer
@@ -1600,7 +1680,12 @@ export default function MapExplorer() {
           <MapResizeOnPanel active={showElevation && elevationPoints.length > 0} />
           {showElevation && elevationMapPoints.length > 0 && (
             <ElevationProfileMarkers
-              points={elevationMapPoints}
+              points={elevationMapPoints.filter((p) => {
+                const b = (p.branch ?? "centerline") as keyof ElevationSeriesVisibility;
+                if (b === "lhs") return elevationVisibility.lhs;
+                if (b === "rhs") return elevationVisibility.rhs;
+                return elevationVisibility.centerline;
+              })}
               focus={elevationFocus}
               onPointClick={handleElevationPointClick}
               interactive={!measure}
@@ -1608,9 +1693,21 @@ export default function MapExplorer() {
           )}
           <FlyToElevationPoint
             focus={elevationFocus}
-            crossSection={elevationCrossSection}
+            crossSection={
+              elevationCrossSection?.filter((p) => {
+                if (p.branch === "lhs") return elevationVisibility.lhs;
+                if (p.branch === "rhs") return elevationVisibility.rhs;
+                return elevationVisibility.centerline;
+              }) ?? null
+            }
             scrubbing={elevationScrubbing}
           />
+          {showRoadFormationGraph && overlays.road_formation && (
+            <RoadFormationScrubMarkers
+              sample={roadFormationScrub}
+              visibility={roadFormationVisibility}
+            />
+          )}
           <CursorTracker onMove={setCursor} />
           <ZoomTracker onScaleLabel={setMapScaleLabel} />
           <MapInstanceCapture onReady={setMapInstance} />
@@ -2292,6 +2389,75 @@ export default function MapExplorer() {
             </>
           )}
 
+          {/* Road formation level (LHS / centerline / RHS) */}
+          {overlays.road_formation && roadFormation && (
+            <>
+              {roadFormation.branches.flatMap((branch) => {
+                if (
+                  roadFormationVisibility[
+                    branch.id as keyof RoadFormationSeriesVisibility
+                  ] === false
+                ) {
+                  return [];
+                }
+                const color = ROAD_FORMATION_BRANCH_COLORS[branch.id] ?? "#f59e0b";
+                const fls = branch.points
+                  .map((p) => p.formation_level_m)
+                  .filter((v): v is number => v != null);
+                const flMin = fls.length ? Math.min(...fls) : null;
+                const flMax = fls.length ? Math.max(...fls) : null;
+
+                // Points are ~10 m apart; a larger jump means a new stretch —
+                // break the line there instead of drawing a connector across the map.
+                const segments: [number, number][][] = [];
+                let cur: [number, number][] = [];
+                let prev: { lat: number; lon: number } | null = null;
+                for (const p of branch.points) {
+                  if (prev && haversineKm(prev.lat, prev.lon, p.lat, p.lon) > 0.15) {
+                    if (cur.length > 1) segments.push(cur);
+                    cur = [];
+                  }
+                  cur.push([p.lat, p.lon]);
+                  prev = p;
+                }
+                if (cur.length > 1) segments.push(cur);
+
+                return segments.map((positions, si) => (
+                  <Polyline
+                    key={`rf-${branch.id}-${si}`}
+                    positions={positions}
+                    pathOptions={{
+                      color,
+                      weight: branch.id === "centerline" ? 4 : 3,
+                      opacity: 0.9,
+                      dashArray: branch.id === "centerline" ? undefined : "8 6",
+                      lineCap: "round",
+                      lineJoin: "round",
+                    }}
+                  >
+                    <Tooltip sticky opacity={0.95} className="geovision-tooltip">
+                      <span className="font-semibold">Road Formation · {branch.name}</span>
+                      <br />
+                      <span className="text-slate-400">
+                        Min formation level{" "}
+                        {flMin != null && flMax != null
+                          ? flMin === flMax
+                            ? `${flMin.toFixed(1)} m`
+                            : `${flMin.toFixed(1)}–${flMax.toFixed(1)} m`
+                          : "—"}
+                      </span>
+                      <br />
+                      <span className="text-slate-400">
+                        {branch.count.toLocaleString()} pts · Ch{" "}
+                        {roadFormation.from_km?.toFixed(2)}–{roadFormation.to_km?.toFixed(2)} km
+                      </span>
+                    </Tooltip>
+                  </Polyline>
+                ));
+              })}
+            </>
+          )}
+
           {/* Structures within acquisition boundary (building footprints) */}
           {overlays.affected_houses && affectedHouses && (
             <GeoJSON
@@ -2319,6 +2485,13 @@ export default function MapExplorer() {
           )}
 
           {/* Geotechnical boreholes */}
+          {overlays.boreholes && (
+            <BoreholeClickBridge
+              boreholes={boreholes}
+              enabled={!measure}
+              onSelect={setSelectedBorehole}
+            />
+          )}
           {overlays.boreholes &&
             boreholes.map((bh, i) => {
               const s = boreholeSummary(bh);
@@ -2528,6 +2701,8 @@ export default function MapExplorer() {
                               <RoadCategoriesSummaryCard compact />
                             ) : item.id === "ground_scour" && groundScourSummary ? (
                               <GroundScourSummaryCard info={groundScourSummary} compact />
+                            ) : item.id === "road_formation" && roadFormationSummary ? (
+                              <RoadFormationSummaryCard info={roadFormationSummary} compact />
                             ) : (
                               <p className="px-0.5 text-[10px] leading-snug text-slate-400">
                                 {item.description || "Layer is active on the map."}
@@ -2714,13 +2889,32 @@ export default function MapExplorer() {
             hflPoints={designHflPoints}
             exportPoints={elevationPoints}
             projectName={project?.name}
+            visibility={elevationVisibility}
+            onVisibilityChange={setElevationVisibility}
             onClose={() => {
               setShowElevation(false);
               setElevationFocus(null);
               setElevationCrossSection(null);
+              setElevationVisibility(DEFAULT_ELEVATION_VISIBILITY);
             }}
             onPointClick={handleElevationPointClick}
             onScrub={handleElevationScrub}
+          />
+        )}
+
+        {showRoadFormationGraph && overlays.road_formation && roadFormation && (
+          <RoadFormationGraphPanel
+            data={roadFormation}
+            elevationPoints={elevationGraphPoints}
+            hflPoints={designHflPoints}
+            visibility={roadFormationVisibility}
+            onVisibilityChange={setRoadFormationVisibility}
+            onClose={() => {
+              setShowRoadFormationGraph(false);
+              setRoadFormationScrub(null);
+              setRoadFormationVisibility(DEFAULT_ROAD_FORMATION_VISIBILITY);
+            }}
+            onScrub={setRoadFormationScrub}
           />
         )}
 
@@ -2981,6 +3175,7 @@ const OVERLAY_ICONS: Record<string, LucideIcon> = {
   affected_houses: Building2,
   flood: CloudRain,
   ground_scour: Waves,
+  road_formation: Route,
   corridor: Fence,
   slope: Mountain,
 };
@@ -3829,6 +4024,75 @@ function RoadCategoriesSummaryCard({ compact = false }: { compact?: boolean }) {
               <span>Stretch</span>
               <span className="text-right font-semibold text-emerald-200">{row.stretch}</span>
             </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RoadFormationSummaryCard({
+  info,
+  compact = false,
+}: {
+  info: RoadFormationSummary;
+  compact?: boolean;
+}) {
+  const accent = "#f59e0b";
+  const rows: Array<{ label: string; value: string }> = [
+    { label: "Points", value: info.pointCount.toLocaleString() },
+    { label: "Lines", value: `${info.branchCount} (LHS / CL / RHS)` },
+    {
+      label: "Chainage",
+      value: `${info.fromKm?.toFixed(2) ?? "—"}–${info.toKm?.toFixed(2) ?? "—"} km`,
+    },
+    {
+      label: "Formation level",
+      value: `${info.formationMinM?.toFixed(1) ?? "—"}–${info.formationMaxM?.toFixed(1) ?? "—"} m`,
+    },
+    {
+      label: "Ground elev",
+      value: `${info.groundMinM?.toFixed(1) ?? "—"}–${info.groundMaxM?.toFixed(1) ?? "—"} m`,
+    },
+  ];
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-amber-400/25 bg-amber-500/5 p-2"
+          : "rounded-xl border border-amber-400/35 bg-amber-500/10 p-2.5"
+      }
+    >
+      <div
+        className={compact ? "mb-2 h-1.5 w-full rounded-full" : "mb-2 h-3 w-full rounded-sm"}
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-amber-300">
+        Road Formation Level · Schedule-B
+      </div>
+      <div className="space-y-1 text-[10px]">
+        {rows.map((row) => (
+          <div key={row.label} className="flex justify-between gap-2">
+            <span className="text-slate-400">{row.label}</span>
+            <span className="tabular-nums font-medium text-white">{row.value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 space-y-1 border-t border-white/10 pt-2 text-[10px]">
+        {(
+          [
+            ["lhs", "LHS 30M"],
+            ["centerline", "Centerline"],
+            ["rhs", "RHS 30M"],
+          ] as const
+        ).map(([id, label]) => (
+          <div key={id} className="flex items-center gap-1.5 text-slate-300">
+            <span
+              className="h-1 w-4 shrink-0 rounded-full"
+              style={{ backgroundColor: ROAD_FORMATION_BRANCH_COLORS[id] }}
+            />
+            {label}
           </div>
         ))}
       </div>
@@ -4901,10 +5165,143 @@ function FlyToElevationPoint({
   );
 }
 
+/** Highlights the road-formation scrubber position on the 2D map (LHS / CL / RHS). */
+function RoadFormationScrubMarkers({
+  sample,
+  visibility = DEFAULT_ROAD_FORMATION_VISIBILITY,
+}: {
+  sample: RoadFormationScrubSample | null;
+  visibility?: RoadFormationSeriesVisibility;
+}) {
+  const map = useMap();
+
+  const visiblePoints =
+    sample?.points.filter(
+      (p) => visibility[p.id as keyof RoadFormationSeriesVisibility] !== false,
+    ) ?? [];
+
+  const center =
+    visiblePoints.find((p) => p.id === "centerline") ??
+    visiblePoints.find((p) => p.id === "rhs") ??
+    visiblePoints.find((p) => p.id === "lhs") ??
+    visiblePoints[0];
+
+  useEffect(() => {
+    if (!center) return;
+    const zoom = Math.max(map.getZoom(), 15);
+    // Instant pan while dragging — animated pans stack and feel laggy
+    map.setView([center.lat, center.lon], zoom, { animate: false });
+  }, [center?.lat, center?.lon, map]);
+
+  if (!sample || !center) return null;
+
+  const linePositions = visiblePoints.map((p) => [p.lat, p.lon] as [number, number]);
+
+  return (
+    <>
+      {linePositions.length >= 2 && (
+        <Polyline
+          positions={linePositions}
+          pathOptions={{ color: "#ffffff", weight: 3, opacity: 0.85, dashArray: "6 4" }}
+        />
+      )}
+      <Circle
+        center={[center.lat, center.lon]}
+        radius={80}
+        pathOptions={{ color: "#f59e0b", fillColor: "#f59e0b", fillOpacity: 0.12, weight: 2 }}
+      />
+      {visiblePoints.map((p) => (
+        <CircleMarker
+          key={`rf-scrub-${p.id}`}
+          center={[p.lat, p.lon]}
+          radius={p.id === "centerline" ? 8 : 6}
+          pathOptions={{
+            color: "#ffffff",
+            fillColor: ROAD_FORMATION_BRANCH_COLORS[p.id] ?? "#f59e0b",
+            fillOpacity: 1,
+            weight: 2,
+          }}
+        />
+      ))}
+      <CircleMarker
+        center={[center.lat, center.lon]}
+        radius={0.01}
+        pathOptions={{ opacity: 0, fillOpacity: 0 }}
+      >
+        <Tooltip direction="top" offset={[0, -12]} opacity={0.95} permanent>
+          <span>
+            Ch {sample.chainage.toFixed(3)} km
+            {visiblePoints.map((p) => (
+              <span key={p.id}>
+                {" · "}
+                <span
+                  style={{
+                    background: ROAD_FORMATION_BRANCH_COLORS[p.id] ?? "#f59e0b",
+                    color: "#0b0e14",
+                    padding: "0 3px",
+                    borderRadius: 2,
+                  }}
+                >
+                  {p.name}{" "}
+                  {p.formationLevelM != null ? `${p.formationLevelM.toFixed(2)} m` : "—"}
+                </span>
+              </span>
+            ))}
+          </span>
+        </Tooltip>
+      </CircleMarker>
+    </>
+  );
+}
+
 function CursorTracker({ onMove }: { onMove: (c: [number, number]) => void }) {
   useMapEvents({
     mousemove: (e) => onMove([e.latlng.lat, e.latlng.lng]),
   });
+  return null;
+}
+
+/**
+ * Map-level click proximity handler for borehole markers.
+ * preferCanvas makes CircleMarker click events unreliable, so resolve the nearest point ourselves.
+ */
+function BoreholeClickBridge({
+  boreholes,
+  enabled,
+  onSelect,
+}: {
+  boreholes: Borehole[];
+  enabled: boolean;
+  onSelect: (bh: Borehole) => void;
+}) {
+  const map = useMap();
+  const boreholesRef = useRef(boreholes);
+  boreholesRef.current = boreholes;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+
+  useMapEvents({
+    click(e) {
+      if (!enabledRef.current) return;
+      const mouse = map.mouseEventToContainerPoint(e.originalEvent);
+      const thresholdPx = 14;
+      let best: Borehole | null = null;
+      let bestDist = thresholdPx;
+      for (const bh of boreholesRef.current) {
+        if (bh.lat == null || bh.lon == null || !bh.layers.length) continue;
+        const pt = map.latLngToContainerPoint(L.latLng(bh.lat, bh.lon));
+        const d = Math.hypot(pt.x - mouse.x, pt.y - mouse.y);
+        if (d < bestDist) {
+          bestDist = d;
+          best = bh;
+        }
+      }
+      if (best) onSelectRef.current(best);
+    },
+  });
+
   return null;
 }
 

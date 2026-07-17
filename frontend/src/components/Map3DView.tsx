@@ -18,7 +18,11 @@ import {
   createWorldTerrainAsync,
 } from "cesium";
 import "cesium/Build/Cesium/Widgets/widgets.css";
-import type { ElevationPoint } from "./ElevationGraphModal";
+import {
+  DEFAULT_ELEVATION_VISIBILITY,
+  type ElevationPoint,
+  type ElevationSeriesVisibility,
+} from "./ElevationGraphModal";
 import type { Project } from "../lib/types";
 import type { ContoursData } from "../lib/contours";
 import { highwayStyle, type RoadNetworkData } from "../lib/roadNetwork";
@@ -51,6 +55,11 @@ type SbLine = {
   positions: [number, number][]; // [lat, lon]
   label: string;
 };
+type RoadFormationLine = {
+  positions: [number, number, number?][]; // [lat, lon, formation level m]
+  label: string;
+  color: string;
+};
 type BoreholePt = { id: string; lat: number; lon: number; name?: string };
 
 export type Map3DOverlays = Record<string, boolean>;
@@ -59,6 +68,7 @@ type Props = {
   project: Project | null;
   overlays: Map3DOverlays;
   showElevation: boolean;
+  elevationVisibility?: ElevationSeriesVisibility;
   lineFeatures: LineFeat[];
   elevationPoints: ElevationPoint[];
   contours1m: ContoursData | null;
@@ -89,6 +99,7 @@ type Props = {
   affectedHouses: AffectedHousesData | null;
   floodScene: FloodScene | null;
   boreholes: BoreholePt[];
+  roadFormationLines: RoadFormationLine[];
   className?: string;
 };
 
@@ -186,9 +197,10 @@ function elevBranchCoords(points: ElevationPoint[], branch: string): [number, nu
 }
 
 /** Centre + LHS + RHS ground elevation ribbons for 3D. */
-function elevFc(points: ElevationPoint[]) {
+function elevFc(points: ElevationPoint[], visibility: ElevationSeriesVisibility) {
   const features: object[] = [];
   for (const branch of ["lhs", "centerline", "rhs"] as const) {
+    if (!visibility[branch]) continue;
     const coords = elevBranchCoords(points, branch);
     if (coords.length < 2) continue;
     const style = ELEV_BRANCH_STYLES[branch];
@@ -474,6 +486,7 @@ export default function Map3DView(props: Props) {
     project,
     overlays,
     showElevation,
+    elevationVisibility = DEFAULT_ELEVATION_VISIBILITY,
     lineFeatures,
     elevationPoints,
     contours1m,
@@ -497,6 +510,7 @@ export default function Map3DView(props: Props) {
     affectedHouses,
     floodScene,
     boreholes,
+    roadFormationLines,
     className = "",
   } = props;
 
@@ -587,6 +601,7 @@ export default function Map3DView(props: Props) {
   }, [
     overlays,
     showElevation,
+    elevationVisibility,
     lineFeatures,
     elevationPoints,
     contours1m,
@@ -610,6 +625,7 @@ export default function Map3DView(props: Props) {
     affectedHouses,
     floodScene,
     boreholes,
+    roadFormationLines,
     project,
   ]);
 
@@ -628,7 +644,13 @@ export default function Map3DView(props: Props) {
             <div className="text-[9px] font-semibold uppercase tracking-wide text-slate-500">
               Ground elevation
             </div>
-            {Object.values(ELEV_BRANCH_STYLES).map(({ color, label }) => (
+            {(
+              Object.entries(ELEV_BRANCH_STYLES) as Array<
+                [keyof typeof ELEV_BRANCH_STYLES, { color: string; label: string }]
+              >
+            )
+              .filter(([branch]) => elevationVisibility[branch as "lhs" | "centerline" | "rhs"])
+              .map(([, { color, label }]) => (
               <div key={label} className="flex items-center gap-1.5">
                 <span className="h-0.5 w-3 shrink-0 rounded-full" style={{ backgroundColor: color }} />
                 <span className="text-slate-300">{label}</span>
@@ -673,7 +695,7 @@ async function syncAll(viewer: Viewer, p: Props, hasTerrain: boolean) {
     await upsert(
       viewer,
       "3d-elev",
-      elevFc(p.elevationPoints),
+      elevFc(p.elevationPoints, p.elevationVisibility ?? DEFAULT_ELEVATION_VISIBILITY),
       (ds) => styleLines(ds, { defaultColor: "#12c9b0", clamp: hasTerrain }),
       !hasTerrain ? false : true,
     );
@@ -714,6 +736,36 @@ async function syncAll(viewer: Viewer, p: Props, hasTerrain: boolean) {
   if (o.road_network && p.roadNetwork) {
     await upsert(viewer, "3d-roads", p.roadNetwork, styleRoadNetwork);
   } else await removeDs(viewer, "3d-roads");
+
+  // Road formation level drawn at the workbook's design elevation.
+  if (o.road_formation && p.roadFormationLines.length) {
+    await upsert(
+      viewer,
+      "3d-roadformation",
+      {
+        type: "FeatureCollection",
+        features: p.roadFormationLines.map((l, i) => ({
+          type: "Feature",
+          properties: { id: i, name: l.label, stroke: l.color, weight: 3 },
+          geometry: {
+            type: "LineString",
+            coordinates: l.positions.map(([lat, lon, height]) => [
+              lon,
+              lat,
+              height ?? 0,
+            ]),
+          },
+        })),
+      },
+      (ds) =>
+        styleLines(ds, {
+          defaultColor: "#f59e0b",
+          width: 3,
+          clamp: false,
+        }),
+      false,
+    );
+  } else await removeDs(viewer, "3d-roadformation");
 
   // Railway
   if (o.railway_lines && p.railwayLines) {

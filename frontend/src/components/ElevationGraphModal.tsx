@@ -24,6 +24,21 @@ export type ElevationScrubSample = {
   dragging?: boolean;
 };
 
+/** Which elevation / HFL series are drawn on the graph and map. */
+export type ElevationSeriesVisibility = {
+  lhs: boolean;
+  centerline: boolean;
+  rhs: boolean;
+  hfl: boolean;
+};
+
+export const DEFAULT_ELEVATION_VISIBILITY: ElevationSeriesVisibility = {
+  lhs: true,
+  centerline: true,
+  rhs: true,
+  hfl: true,
+};
+
 export type DesignHflPoint = {
   id: number;
   chainage_km: number;
@@ -39,6 +54,9 @@ type Props = {
   onPointClick?: (point: ElevationPoint) => void;
   /** Fired while the vertical scrubber moves — used to sync the map cross-section. */
   onScrub?: (sample: ElevationScrubSample) => void;
+  /** Fired when LHS / Centre / RHS / Design HFL visibility chips are toggled. */
+  visibility?: ElevationSeriesVisibility;
+  onVisibilityChange?: (next: ElevationSeriesVisibility) => void;
   projectName?: string;
   exportPoints?: ElevationPoint[];
 };
@@ -83,6 +101,8 @@ export default function ElevationGraphModal({
   onClose,
   onPointClick,
   onScrub,
+  visibility: visibilityProp,
+  onVisibilityChange,
   projectName,
   exportPoints,
 }: Props) {
@@ -92,6 +112,35 @@ export default function ElevationGraphModal({
   const pendingXRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
   const scrubChainageRef = useRef<number | null>(null);
+
+  const [internalVisibility, setInternalVisibility] = useState<ElevationSeriesVisibility>(
+    DEFAULT_ELEVATION_VISIBILITY,
+  );
+  const visibility = visibilityProp ?? internalVisibility;
+  const setVisibility = (next: ElevationSeriesVisibility) => {
+    if (visibilityProp == null) setInternalVisibility(next);
+    onVisibilityChange?.(next);
+  };
+
+  const toggleBranch = (branch: "lhs" | "centerline" | "rhs") => {
+    const othersOn =
+      (branch !== "lhs" && visibility.lhs) ||
+      (branch !== "centerline" && visibility.centerline) ||
+      (branch !== "rhs" && visibility.rhs);
+    // Click a branch → show only that branch (+ HFL). Click again when solo → restore all.
+    if (visibility[branch] && !othersOn) {
+      setVisibility({ ...visibility, lhs: true, centerline: true, rhs: true });
+    } else {
+      setVisibility({
+        ...visibility,
+        lhs: branch === "lhs",
+        centerline: branch === "centerline",
+        rhs: branch === "rhs",
+      });
+    }
+  };
+
+  const toggleHfl = () => setVisibility({ ...visibility, hfl: !visibility.hfl });
 
   const normalized = useMemo(() => {
     if (!points?.length) return [];
@@ -353,15 +402,21 @@ export default function ElevationGraphModal({
 
   if (!normalized.length || scrubChainage == null || !sample) return null;
 
-  const minY = Math.min(
-    ...normalized.map((p) => p.elevation),
-    ...(normalizedHfl.length ? normalizedHfl.map((p) => p.design_hfl_continuous_m) : []),
-  );
-  const maxY = Math.max(
-    ...normalized.map((p) => p.elevation),
-    ...(normalizedHfl.length ? normalizedHfl.map((p) => p.design_hfl_continuous_m) : []),
-  );
-  const avgY = normalized.reduce((sum, p) => sum + p.elevation, 0) / normalized.length;
+  const visibleSeries = series.filter((s) => visibility[s.branch as keyof ElevationSeriesVisibility]);
+  const showHfl = visibility.hfl && normalizedHfl.length > 0;
+  const elevForScale = visibleSeries.flatMap((s) => s.points.map((p) => p.elevation));
+  const hflForScale = showHfl
+    ? normalizedHfl.map((p) => p.design_hfl_continuous_m)
+    : [];
+  const scaleVals = elevForScale.length || hflForScale.length
+    ? [...elevForScale, ...hflForScale]
+    : normalized.map((p) => p.elevation);
+  const minY = Math.min(...scaleVals);
+  const maxY = Math.max(...scaleVals);
+  const avgY =
+    elevForScale.length > 0
+      ? elevForScale.reduce((sum, v) => sum + v, 0) / elevForScale.length
+      : normalized.reduce((sum, p) => sum + p.elevation, 0) / normalized.length;
 
   const tickPoints =
     centerlinePts.length > 0
@@ -395,21 +450,39 @@ export default function ElevationGraphModal({
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0 text-[10px]">
             <h3 className="text-[11px] font-bold text-white">Ground Elevation Profile</h3>
             <span className="text-slate-500">·</span>
-            <span className="text-slate-400">Survey · 50 m · drag on centreline · shows LHS / Centre / RHS</span>
-            {series.map((s) => (
-              <span key={s.branch} className="inline-flex items-center gap-1">
-                <span className="h-0.5 w-3 rounded" style={{ background: s.color }} />
-                <span style={{ color: s.color }}>{s.label}</span>
-              </span>
-            ))}
+            <span className="text-slate-400">Survey · 50 m · click chips to filter · drag centreline</span>
+            {series.map((s) => {
+              const on = visibility[s.branch as "lhs" | "centerline" | "rhs"];
+              return (
+                <button
+                  key={s.branch}
+                  type="button"
+                  onClick={() => toggleBranch(s.branch as "lhs" | "centerline" | "rhs")}
+                  aria-pressed={on}
+                  title={on ? `Hide ${s.label} (solo / restore)` : `Show only ${s.label}`}
+                  className="inline-flex items-center gap-1 rounded px-1 py-0.5 transition hover:bg-white/5"
+                  style={{ opacity: on ? 1 : 0.35 }}
+                >
+                  <span className="h-0.5 w-3 rounded" style={{ background: s.color }} />
+                  <span style={{ color: s.color }}>{s.label}</span>
+                </button>
+              );
+            })}
             {normalizedHfl.length > 0 && (
-              <span className="inline-flex items-center gap-1">
+              <button
+                type="button"
+                onClick={toggleHfl}
+                aria-pressed={visibility.hfl}
+                title={visibility.hfl ? "Hide Design HFL" : "Show Design HFL"}
+                className="inline-flex items-center gap-1 rounded px-1 py-0.5 transition hover:bg-white/5"
+                style={{ opacity: visibility.hfl ? 1 : 0.35 }}
+              >
                 <span
                   className="h-0.5 w-3 rounded border-t border-dashed"
                   style={{ borderColor: HFL_COLOR, background: HFL_COLOR }}
                 />
                 <span style={{ color: HFL_COLOR }}>Design HFL (continuous)</span>
-              </span>
+              </button>
             )}
             <span className="text-slate-500">·</span>
             <span>
@@ -489,22 +562,78 @@ export default function ElevationGraphModal({
           <span className="rounded bg-white/10 px-2 py-0.5 font-semibold text-white">
             Centre Ch {sample.chainage.toFixed(3)} km
           </span>
-          <span className="rounded px-2 py-0.5 font-semibold" style={{ background: "#3b82f620", color: "#60a5fa" }}>
+          <button
+            type="button"
+            onClick={() => toggleBranch("lhs")}
+            aria-pressed={visibility.lhs}
+            title={visibility.lhs ? "Show only LHS (click again to show all)" : "Show only LHS"}
+            className="rounded px-2 py-0.5 font-semibold transition hover:brightness-125"
+            style={{
+              background: "#3b82f620",
+              color: "#60a5fa",
+              opacity: visibility.lhs ? 1 : 0.35,
+              outline: visibility.lhs && !visibility.centerline && !visibility.rhs
+                ? "1px solid #60a5fa"
+                : undefined,
+            }}
+          >
             LHS {sample.lhs != null ? `${sample.lhs.elevation.toFixed(2)} m` : "—"}
-          </span>
-          <span className="rounded px-2 py-0.5 font-semibold" style={{ background: "#12c9b020", color: "#38e1c6" }}>
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleBranch("centerline")}
+            aria-pressed={visibility.centerline}
+            title={
+              visibility.centerline
+                ? "Show only Centre (click again to show all)"
+                : "Show only Centre"
+            }
+            className="rounded px-2 py-0.5 font-semibold transition hover:brightness-125"
+            style={{
+              background: "#12c9b020",
+              color: "#38e1c6",
+              opacity: visibility.centerline ? 1 : 0.35,
+              outline:
+                visibility.centerline && !visibility.lhs && !visibility.rhs
+                  ? "1px solid #38e1c6"
+                  : undefined,
+            }}
+          >
             Centre {sample.centerline != null ? `${sample.centerline.elevation.toFixed(2)} m` : "—"}
-          </span>
-          <span className="rounded px-2 py-0.5 font-semibold" style={{ background: "#f59e0b20", color: "#fbbf24" }}>
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleBranch("rhs")}
+            aria-pressed={visibility.rhs}
+            title={visibility.rhs ? "Show only RHS (click again to show all)" : "Show only RHS"}
+            className="rounded px-2 py-0.5 font-semibold transition hover:brightness-125"
+            style={{
+              background: "#f59e0b20",
+              color: "#fbbf24",
+              opacity: visibility.rhs ? 1 : 0.35,
+              outline: visibility.rhs && !visibility.lhs && !visibility.centerline
+                ? "1px solid #fbbf24"
+                : undefined,
+            }}
+          >
             RHS {sample.rhs != null ? `${sample.rhs.elevation.toFixed(2)} m` : "—"}
-          </span>
+          </button>
           {sample.hfl && (
-            <span
-              className="rounded px-2 py-0.5 font-semibold"
-              style={{ background: "#38bdf820", color: "#7dd3fc" }}
+            <button
+              type="button"
+              onClick={toggleHfl}
+              aria-pressed={visibility.hfl}
+              title={visibility.hfl ? "Hide Design HFL" : "Show Design HFL"}
+              className="rounded px-2 py-0.5 font-semibold transition hover:brightness-125"
+              style={{
+                background: "#38bdf820",
+                color: "#7dd3fc",
+                opacity: visibility.hfl ? 1 : 0.35,
+                outline: visibility.hfl ? "1px solid #7dd3fc88" : undefined,
+              }}
             >
               Design HFL {sample.hfl.design_hfl_continuous_m.toFixed(2)} m
-            </span>
+            </button>
           )}
           <span className="hidden text-slate-500 sm:inline">← → keys</span>
         </div>
@@ -607,7 +736,7 @@ export default function ElevationGraphModal({
               </g>
             ))}
 
-            {series.map((s) => (
+            {visibleSeries.map((s) => (
               <polyline
                 key={`line-${s.branch}`}
                 fill="none"
@@ -621,7 +750,7 @@ export default function ElevationGraphModal({
               />
             ))}
 
-            {normalizedHfl.length > 1 && (
+            {showHfl && normalizedHfl.length > 1 && (
               <polyline
                 fill="none"
                 stroke={HFL_COLOR}
@@ -636,8 +765,9 @@ export default function ElevationGraphModal({
               />
             )}
 
+
             {/* Dots sit on the centreline scrubber X; Y = each branch elevation at that Ch */}
-            {sample.lhs && (
+            {visibility.lhs && sample.lhs && (
               <circle
                 cx={scrubX}
                 cy={yScale(sample.lhs.elevation)}
@@ -648,7 +778,7 @@ export default function ElevationGraphModal({
                 style={{ pointerEvents: "none" }}
               />
             )}
-            {sample.centerline && (
+            {visibility.centerline && sample.centerline && (
               <circle
                 cx={scrubX}
                 cy={yScale(sample.centerline.elevation)}
@@ -659,7 +789,7 @@ export default function ElevationGraphModal({
                 style={{ pointerEvents: "none" }}
               />
             )}
-            {sample.rhs && (
+            {visibility.rhs && sample.rhs && (
               <circle
                 cx={scrubX}
                 cy={yScale(sample.rhs.elevation)}
@@ -670,7 +800,7 @@ export default function ElevationGraphModal({
                 style={{ pointerEvents: "none" }}
               />
             )}
-            {sample.hfl && (
+            {visibility.hfl && sample.hfl && (
               <circle
                 cx={scrubX}
                 cy={yScale(sample.hfl.design_hfl_continuous_m)}
