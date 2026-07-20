@@ -59,6 +59,8 @@ const M_PER_DEG_LAT = 110540;
  * using the previous/next anchor points to estimate the local tangent. Works in
  * a local metric frame (longitude scaled by cos(lat)) so the offset stays a
  * true perpendicular and constant width even on east–west stretches.
+ *
+ * Anchors use the resolver's `[lon, lat]` order.
  */
 function offsetPerp(
   anchor: [number, number],
@@ -66,14 +68,15 @@ function offsetPerp(
   next: [number, number] | null,
   offsetM: number,
 ): { lat: number; lon: number } {
-  const [lat, lon] = anchor;
+  const lon = anchor[0];
+  const lat = anchor[1];
   if (!offsetM) return { lat, lon };
 
   const mPerDegLon = M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180);
   const a = prev ?? anchor;
   const b = next ?? anchor;
-  const tEast = (b[1] - a[1]) * mPerDegLon;
-  const tNorth = (b[0] - a[0]) * M_PER_DEG_LAT;
+  const tEast = (b[0] - a[0]) * mPerDegLon;
+  const tNorth = (b[1] - a[1]) * M_PER_DEG_LAT;
   const len = Math.hypot(tEast, tNorth);
   if (len < 1e-6) return { lat, lon };
 
@@ -95,12 +98,14 @@ function expandBranchPoints(
   const segments: CutFillSegment[] =
     branch.segments?.length > 0 ? branch.segments : branch.stretches ?? [];
 
-  // Anchor lat/lon for each segment: prefer the coordinate embedded in the
-  // datasheet, fall back to chainage resolution.
-  const anchors: Array<[number, number] | null> = segments.map((seg) => {
-    if (seg.lat != null && seg.lon != null) return [seg.lat, seg.lon];
-    return resolveChainage(seg.mid_km);
-  });
+  // Anchor every point on the alignment centreline resolved from the road
+  // formation data. The datasheet's own lat/lon sit ~30 m off-centre (they are
+  // the "30 m RHS/LHS" measurement points) and the LHS column is unordered, so
+  // resolving by chainage and offsetting a small fixed distance keeps both
+  // series on the carriageway.
+  const anchors: Array<[number, number] | null> = segments.map((seg) =>
+    resolveChainage(seg.mid_km),
+  );
 
   const points: CutFillMapPoint[] = [];
   for (let i = 0; i < segments.length; i++) {

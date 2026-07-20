@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 export default function Footer() {
   return (
     <footer className="border-t border-white/10 bg-ink-950">
-      <div className="mx-auto grid max-w-7xl gap-10 px-5 py-14 md:grid-cols-3">
+      <div className="mx-auto grid max-w-7xl gap-10 px-5 py-14 md:grid-cols-2">
         <div className="md:col-span-1">
           <div className="flex items-center gap-2.5">
             <img
@@ -26,16 +26,7 @@ export default function Footer() {
           links={[
             ["Map Explorer", "/explorer"],
             ["Dashboard", "/dashboard"],
-            ["Projects", "/projects"],
             ["Features", "/#features"],
-          ]}
-        />
-        <FooterCol
-          title="Company"
-          links={[
-            ["About", "/#"],
-            ["Resources", "/#"],
-            ["Contact", "/#"],
           ]}
         />
       </div>

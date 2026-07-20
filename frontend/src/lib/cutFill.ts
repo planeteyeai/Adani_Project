@@ -151,8 +151,8 @@ export const CUT_FILL_BRANCH_META: Record<
   CutFillBranchId,
   { label: string; color: string; offsetM: number }
 > = {
-  lhs: { label: "LHS", color: "#38bdf8", offsetM: -15 },
-  rhs: { label: "RHS", color: "#f97316", offsetM: 15 },
+  lhs: { label: "LHS", color: "#38bdf8", offsetM: -12 },
+  rhs: { label: "RHS", color: "#f97316", offsetM: 12 },
 };
 
 export function cutFillClassColor(classId?: string | null): string {
