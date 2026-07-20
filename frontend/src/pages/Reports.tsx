@@ -25,7 +25,7 @@ const REPORTS: ReportItem[] = [
     href: "/reports/Geotechnical_Investigation_Report.docx",
     filename: "Geotechnical_Investigation_Report.docx",
     meta: [
-      "35 investigation locations",
+      "36 investigation locations",
       "~1 km spacing",
       "40 m exploration depth",
       "Client: Adani",
