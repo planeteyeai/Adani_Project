@@ -216,7 +216,7 @@ body {
   }
 }
 
-.leaflet-overlay-pane path.active-layer-blink {
+.leaflet-pane path.active-layer-blink {
   animation: active-layer-blink 0.75s ease-in-out infinite;
 }
 
@@ -232,9 +232,26 @@ body {
   }
 }
 
-.leaflet-overlay-pane path.active-layer-marker-blink,
+.leaflet-pane path.active-layer-marker-blink,
 .leaflet-marker-icon.active-layer-marker-blink {
   animation: active-layer-marker-blink 0.75s ease-in-out infinite;
+}
+
+/* Canvas overlays (trees, contours) can't take an SVG glow, so pulse the whole layer */
+@keyframes active-layer-canvas-blink {
+  0%,
+  100% {
+    opacity: 1;
+    filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.5));
+  }
+  50% {
+    opacity: 0.3;
+    filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.95));
+  }
+}
+
+canvas.active-layer-canvas-blink {
+  animation: active-layer-canvas-blink 0.75s ease-in-out infinite;
 }
 
 @keyframes active-layer-row-pulse {

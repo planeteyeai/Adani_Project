@@ -27,6 +27,8 @@ import {
   Activity,
   Building2,
   ChevronDown,
+  PanelLeftClose,
+  PanelLeftOpen,
   CloudRain,
   Compass,
   Crosshair,
@@ -118,6 +120,7 @@ import { fetchAffectedHouses, type AffectedHousesData } from "../lib/affectedHou
 import { fetchWaterBodies, fetchWaterways, type WaterBodiesData } from "../lib/waterBodies";
 import { fetchVillages, type VillagesData } from "../lib/villages";
 import { fetchLulc, lulcSummaryInfo, type LulcData, type LulcSummaryInfo } from "../lib/lulc";
+import { fetchBarrenLand, type BarrenLandData } from "../lib/barrenLand";
 import { fetchContours05m, fetchContours1m, type ContoursData } from "../lib/contours";
 import { fetchAdjacentRoads, type AdjacentRoadsData } from "../lib/adjacentRoads";
 import { fetchRoadNetwork, highwayStyle, type RoadNetworkData } from "../lib/roadNetwork";
@@ -171,7 +174,6 @@ import {
   drainInfo,
   elevatedStructureInfo,
   projectAlignmentInfo,
-  reWallInfo,
   scheduleBFromStats,
   serviceRoadInfo,
   shoulderInfo,
@@ -181,12 +183,23 @@ import {
   type DrainInfo,
   type ElevatedStructureInfo,
   type ProjectAlignmentInfo,
-  type ReWallInfo,
   type ScheduleBStructure,
   type ServiceRoadInfo,
   type ShoulderInfo,
   type StructuresPointsInfo,
 } from "../lib/scheduleB";
+import {
+  fetchReWalls,
+  reWallLocationsSummary,
+  type ReWallLocationSummary,
+  type ReWallsData,
+} from "../lib/reWalls";
+import {
+  fetchInterchanges,
+  interchangesSummary,
+  type InterchangeSummary,
+  type InterchangesData,
+} from "../lib/interchanges";
 import type { Project } from "../lib/types";
 
 type MapPoint = {
@@ -209,9 +222,9 @@ type SbLineFeature = {
 };
 
 const DEFAULT_OVERLAYS: Record<string, boolean> = {
-  alignment: true,
-  markers: false,
-  structures: true,
+    alignment: true,
+    markers: false,
+    structures: true,
   toll_plazas: false,
   road_categories: false,
   road_network: false,
@@ -223,14 +236,15 @@ const DEFAULT_OVERLAYS: Record<string, boolean> = {
   substations: false,
   transmission_towers: false,
   sb_elevated: false,
-  sb_service_roads: false,
-  sb_re_walls: false,
-  sb_drains: false,
-  sb_ramps: false,
-  sb_paved_shoulders: false,
+    sb_service_roads: false,
+    sb_re_walls: false,
+    sb_drains: false,
+    sb_ramps: false,
+    sb_paved_shoulders: false,
   boreholes: false,
   water_bodies: false,
   lulc: false,
+  barren_land: false,
   trees: false,
   contours_1m: false,
   contours_0_5m: false,
@@ -239,9 +253,9 @@ const DEFAULT_OVERLAYS: Record<string, boolean> = {
   flood: false,
   ground_scour: false,
   road_formation: false,
-  corridor: false,
-  slope: false,
-};
+      corridor: false,
+      slope: false,
+    };
 
 /** Overlays allowed in 3D view — everything else is forced off. */
 const MAP_3D_OVERLAY_IDS = new Set(["alignment"]);
@@ -255,8 +269,39 @@ function overlaysFor3d(current: Record<string, boolean>): Record<string, boolean
   return next;
 }
 
+/**
+ * Run async tasks with a bounded number in flight at once.
+ *
+ * Browsers cap concurrent connections per host (~6 on HTTP/1.1); firing every
+ * layer fetch simultaneously makes the queued ones wait while their
+ * AbortSignal.timeout keeps ticking, so slower requests spuriously abort and a
+ * layer silently fails to load. Limiting concurrency starts each request's
+ * timeout only when it actually begins, so nothing aborts while merely queued.
+ */
+async function runWithConcurrency(
+  tasks: Array<() => Promise<void>>,
+  limit = 5,
+): Promise<void> {
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, tasks.length) },
+    async () => {
+      while (cursor < tasks.length) {
+        const index = cursor++;
+        try {
+          await tasks[index]();
+        } catch {
+          // Individual fetchers already handle their own failures.
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+}
+
 export default function MapExplorer() {
   const [project, setProject] = useState<Project | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [baseId, setBaseId] = useState("google-satellite");
   const [opacity, setOpacity] = useState(0.7);
   const [showElevation, setShowElevation] = useState(false);
@@ -282,6 +327,9 @@ export default function MapExplorer() {
   const [waterways, setWaterways] = useState<WaterBodiesData | null>(null);
   const [villagesData, setVillagesData] = useState<VillagesData | null>(null);
   const [lulcData, setLulcData] = useState<LulcData | null>(null);
+  const [barrenLand, setBarrenLand] = useState<BarrenLandData | null>(null);
+  const [reWalls, setReWalls] = useState<ReWallsData | null>(null);
+  const [interchanges, setInterchanges] = useState<InterchangesData | null>(null);
   const [contours1m, setContours1m] = useState<ContoursData | null>(null);
   const [contours05m, setContours05m] = useState<ContoursData | null>(null);
   const [roadNetwork, setRoadNetwork] = useState<RoadNetworkData | null>(null);
@@ -345,33 +393,48 @@ export default function MapExplorer() {
   }> | null>(null);
 
   useEffect(() => {
-    fetchProject("demo").then(setProject);
-    fetchElevationProfile().then(setElevationPoints);
-    fetchDesignHfl().then(setDesignHflPoints);
-    fetchGeotech().then(setGeotech);
-    fetchAffectedHouses().then(setAffectedHouses);
-    fetchElevatedScour().then(setElevatedScour);
-    fetchGroundScour().then(setGroundScour);
-    fetchRoadFormation().then(setRoadFormation);
-    fetchWaterBodies().then(setWaterBodies);
-    fetchWaterways().then(setWaterways);
-    fetchVillages().then(setVillagesData);
-    fetchLulc().then(setLulcData);
-    fetchContours1m().then(setContours1m);
-    fetchContours05m().then(setContours05m);
-    fetchRoadNetwork().then(setRoadNetwork);
-    fetchAdjacentRoads().then(setAdjacentRoads);
-    fetchRailwayLines().then(setRailwayLines);
-    fetchRailwayStations().then(setRailwayStations);
-    fetchRailwayPlatforms().then(setRailwayPlatforms);
-    fetchTransmissionLines().then(setTransmissionLines);
-    fetchSubstations().then(setSubstations);
-    fetchTransmissionTowers().then(setTransmissionTowers);
-    fetchTrees().then(setTreesData);
-    fetchFloodTimeseries().then((data) => {
-      setFloodData(data);
-      if (data?.dates?.length) setFloodDate(data.dates[0]);
-    });
+    let cancelled = false;
+    const set = <T,>(setter: (v: T) => void) => (v: T) => {
+      if (!cancelled) setter(v);
+    };
+    const tasks: Array<() => Promise<void>> = [
+      () => fetchProject("demo").then(set(setProject)),
+      () => fetchElevationProfile().then(set(setElevationPoints)),
+      () => fetchDesignHfl().then(set(setDesignHflPoints)),
+      () => fetchGeotech().then(set(setGeotech)),
+      () => fetchAffectedHouses().then(set(setAffectedHouses)),
+      () => fetchElevatedScour().then(set(setElevatedScour)),
+      () => fetchGroundScour().then(set(setGroundScour)),
+      () => fetchRoadFormation().then(set(setRoadFormation)),
+      () => fetchWaterBodies().then(set(setWaterBodies)),
+      () => fetchWaterways().then(set(setWaterways)),
+      () => fetchVillages().then(set(setVillagesData)),
+      () => fetchLulc().then(set(setLulcData)),
+      () => fetchBarrenLand().then(set(setBarrenLand)),
+      () => fetchReWalls().then(set(setReWalls)),
+      () => fetchInterchanges().then(set(setInterchanges)),
+      () => fetchContours1m().then(set(setContours1m)),
+      () => fetchContours05m().then(set(setContours05m)),
+      () => fetchRoadNetwork().then(set(setRoadNetwork)),
+      () => fetchAdjacentRoads().then(set(setAdjacentRoads)),
+      () => fetchRailwayLines().then(set(setRailwayLines)),
+      () => fetchRailwayStations().then(set(setRailwayStations)),
+      () => fetchRailwayPlatforms().then(set(setRailwayPlatforms)),
+      () => fetchTransmissionLines().then(set(setTransmissionLines)),
+      () => fetchSubstations().then(set(setSubstations)),
+      () => fetchTransmissionTowers().then(set(setTransmissionTowers)),
+      () => fetchTrees().then(set(setTreesData)),
+      () =>
+        fetchFloodTimeseries().then((data) => {
+          if (cancelled) return;
+          setFloodData(data);
+          if (data?.dates?.length) setFloodDate(data.dates[0]);
+        }),
+    ];
+    runWithConcurrency(tasks, 5);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -699,16 +762,29 @@ export default function MapExplorer() {
         offset: 0.00024,
         label: (r) => `Drain ${r.from_km}–${r.to_km} km`,
       }),
-      ramps: build(scheduleB?.interchange_ramps, {
-        offset: 0,
-        label: (r) => String(r.description ?? r.interchange ?? "Ramp"),
-      }),
+      ramps: interchanges
+        ? interchanges.features.map((f) => ({
+            positions: f.geometry.coordinates.map(
+              ([lon, lat]) => [lat, lon] as [number, number],
+            ),
+            from: 0,
+            to: 0,
+            label: f.properties.name,
+            details: {
+              length_km: f.properties.length_km,
+              source: "Interchanges KML",
+            },
+          }))
+        : build(scheduleB?.interchange_ramps, {
+            offset: 0,
+            label: (r) => String(r.description ?? r.interchange ?? "Ramp"),
+          }),
       paved_shoulders: build(scheduleB?.paved_shoulders, {
         offset: -0.00024,
         label: (r) => `Paved Shoulder ${r.from_km}–${r.to_km} km`,
       }),
     };
-  }, [scheduleB, resolveChainage, elevatedScour]);
+  }, [scheduleB, resolveChainage, elevatedScour, interchanges]);
 
   const elevatedInfo = useMemo(
     () => elevatedStructureInfo(scheduleB),
@@ -721,8 +797,13 @@ export default function MapExplorer() {
   );
 
   const reWallSummary = useMemo(
-    () => reWallInfo(scheduleB),
-    [scheduleB],
+    () => reWallLocationsSummary(reWalls),
+    [reWalls],
+  );
+
+  const interchangeSummary = useMemo(
+    () => interchangesSummary(interchanges),
+    [interchanges],
   );
 
   const drainSummary = useMemo(
@@ -791,6 +872,21 @@ export default function MapExplorer() {
     [],
   );
   const layerBlinkBright = useLayerBlinkPulse(expandedActiveLayerId != null);
+
+  /** Remount key suffix so a GeoJSON layer switches to the blink SVG renderer. */
+  const blinkKey = (id: string) => (expandedActiveLayerId === id ? "blink" : "steady");
+  /** Bump the stroke weight of a path style while its active-layer card is open. */
+  const withBlink = (id: string, base: L.PathOptions): L.PathOptions =>
+    expandedActiveLayerId === id ? { ...base, weight: (base.weight ?? 1) + 1.5 } : base;
+  /**
+   * Top-level GeoJSON options that force the SVG renderer + glow class on the
+   * child paths (needed because the map uses preferCanvas). Spread onto <GeoJSON>.
+   * Returned as `object` so the untyped `renderer`/`className` props pass through.
+   */
+  const blinkGeoJson = (id: string): object =>
+    expandedActiveLayerId === id
+      ? { renderer: blinkSvgRenderer, className: "active-layer-blink" }
+      : {};
 
   const activeOverlayItems = useMemo(
     () => ANALYSIS_OVERLAYS.filter((o) => overlays[o.id]),
@@ -1079,10 +1175,10 @@ export default function MapExplorer() {
     const mapped =
       elevationPointIndex.get(key) ??
       elevationMapPoints.find(
-        (p) =>
-          p.chainage === point.chainage &&
+      (p) =>
+        p.chainage === point.chainage &&
           (point.branch == null || p.branch === point.branch),
-      );
+    );
     if (!mapped) return;
     setElevationFocus({
       lat: mapped.latitude,
@@ -1146,8 +1242,13 @@ export default function MapExplorer() {
     <div className="flex h-dvh w-full flex-col overflow-hidden pt-16">
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Left sidebar — map controls, project overview, layers */}
-        <aside className="flex w-80 shrink-0 flex-col border-r border-white/10 bg-[#0b0e14]">
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+        <aside
+          className={`flex shrink-0 flex-col overflow-hidden bg-[#0b0e14] transition-[width,border-color] duration-300 ease-out ${
+            sidebarOpen ? "w-80 border-r border-white/10" : "w-0 border-r-0 border-transparent"
+          }`}
+          aria-hidden={!sidebarOpen}
+        >
+          <div className="flex w-80 min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
             <SidebarSection
               title="MAP CONTROLS"
               open={mapControlsOpen}
@@ -1582,6 +1683,19 @@ export default function MapExplorer() {
         </aside>
 
         <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setSidebarOpen((open) => !open)}
+          className="absolute left-0 top-1/2 z-[1200] flex h-14 w-8 -translate-y-1/2 items-center justify-center rounded-r-lg border border-l-0 border-white/15 bg-[#111820]/95 text-slate-200 shadow-xl backdrop-blur transition hover:w-9 hover:bg-[#18222d] hover:text-white"
+          aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+          title={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+        >
+          {sidebarOpen ? (
+            <PanelLeftClose className="h-4 w-4" />
+          ) : (
+            <PanelLeftOpen className="h-4 w-4" />
+          )}
+        </button>
         <div className="relative min-h-0 flex-1 overflow-hidden">
         {mapMode === "3d" ? (
           <Map3DView
@@ -1677,7 +1791,10 @@ export default function MapExplorer() {
           )}
 
           <FitBounds project={project} />
+          <MapAutoResize />
+          <MapResizeOnPanel active={sidebarOpen} />
           <MapResizeOnPanel active={showElevation && elevationPoints.length > 0} />
+          <MapResizeOnPanel active={showFloodPanel} />
           {showElevation && elevationMapPoints.length > 0 && (
             <ElevationProfileMarkers
               points={elevationMapPoints.filter((p) => {
@@ -1742,29 +1859,29 @@ export default function MapExplorer() {
               const color = overlays.slope ? slopeColor(i) : line.stroke;
               const weight = overlays.slope ? 3 : Math.min(6, Math.max(2, line.weight));
               return (
-                <Polyline
-                  key={"al" + i}
+              <Polyline
+                key={"al" + i}
                   positions={positions}
-                  pathOptions={{
+                pathOptions={{
                     color,
                     weight,
-                    opacity: 0.95,
+                  opacity: 0.95,
                     interactive: false,
                     className:
                       expandedActiveLayerId === "alignment" ? "active-layer-blink" : undefined,
-                  }}
+                }}
                   {...(expandedActiveLayerId === "alignment"
                     ? { renderer: blinkSvgRenderer }
                     : {})}
-                >
-                  {(line.folder || line.name) && (
-                    <Tooltip sticky opacity={0.9} className="geovision-tooltip">
+              >
+                {(line.folder || line.name) && (
+                  <Tooltip sticky opacity={0.9} className="geovision-tooltip">
                       <span className="font-semibold">
                         {line.folder?.split(" / ").pop() ?? line.name}
                       </span>
-                    </Tooltip>
-                  )}
-                </Polyline>
+                  </Tooltip>
+                )}
+              </Polyline>
               );
             })}
 
@@ -1779,16 +1896,45 @@ export default function MapExplorer() {
               blink={expandedActiveLayerId === "sb_elevated"}
             />
           )}
-          {overlays.sb_ramps && (
-            <SbLineLayer
-              features={sbLines.ramps}
-              color="#eab308"
-              weight={4}
-              opacity={0.85}
-              unit="Interchange ramp"
-              blink={expandedActiveLayerId === "sb_ramps"}
-            />
-          )}
+          {overlays.sb_ramps &&
+            (interchanges ? (
+              <GeoJSON
+                key={`interchanges-${interchanges.source_file ?? "kml"}-${interchanges.count}-${blinkKey("sb_ramps")}`}
+                data={interchanges}
+                {...blinkGeoJson("sb_ramps")}
+                style={() =>
+                  withBlink("sb_ramps", {
+                    color: interchanges.color,
+                    weight: 4,
+                    opacity: 0.9,
+                    lineCap: "round",
+                    lineJoin: "round",
+                  })
+                }
+                onEachFeature={(feature, layer) => {
+                  const props = feature.properties as {
+                    name?: string;
+                    length_km?: number | null;
+                  };
+                  const len =
+                    props.length_km != null ? `${props.length_km.toFixed(3)} km` : "";
+                  layer.bindTooltip(
+                    `<span class="font-semibold">${props.name ?? "Interchange ramp"}</span>` +
+                      (len ? `<br/><span class="text-slate-400">Length ${len}</span>` : ""),
+                    { direction: "top", opacity: 0.95, className: "geovision-tooltip", sticky: true },
+                  );
+                }}
+              />
+            ) : (
+              <SbLineLayer
+                features={sbLines.ramps}
+                color="#eab308"
+                weight={4}
+                opacity={0.85}
+                unit="Interchange ramp"
+                blink={expandedActiveLayerId === "sb_ramps"}
+              />
+            ))}
           {overlays.sb_service_roads && (
             <SbLineLayer
               features={sbLines.service_roads}
@@ -1800,14 +1946,35 @@ export default function MapExplorer() {
               blink={expandedActiveLayerId === "sb_service_roads"}
             />
           )}
-          {overlays.sb_re_walls && (
-            <SbLineLayer
-              features={sbLines.re_walls}
-              color="#f97316"
-              weight={4}
-              opacity={0.9}
-              unit="RE wall"
-              blink={expandedActiveLayerId === "sb_re_walls"}
+          {overlays.sb_re_walls && reWalls && (
+            <GeoJSON
+              key={`re-walls-${reWalls.source_file ?? "kml"}-${reWalls.count}-${blinkKey("sb_re_walls")}`}
+              data={reWalls}
+              {...blinkGeoJson("sb_re_walls")}
+              style={withBlink("sb_re_walls", {
+                color: reWalls.color,
+                weight: 2,
+                fillColor: reWalls.color,
+                fillOpacity: 0.45,
+              })}
+              onEachFeature={(feature, layer) => {
+                const props = feature.properties as {
+                  name?: string;
+                  from_km?: number | null;
+                  to_km?: number | null;
+                  length_km?: number | null;
+                };
+                const range =
+                  props.from_km != null && props.to_km != null
+                    ? `Ch ${props.from_km}–${props.to_km} km`
+                    : "";
+                const len = props.length_km != null ? ` · ${props.length_km} km` : "";
+                layer.bindTooltip(
+                  `<span class="font-semibold">${props.name ?? "RE Wall"}</span>` +
+                    (range ? `<br/><span class="text-slate-400">${range}${len}</span>` : ""),
+                  { direction: "top", opacity: 0.95, className: "geovision-tooltip" },
+                );
+              }}
             />
           )}
           {overlays.sb_drains && (
@@ -1928,17 +2095,18 @@ export default function MapExplorer() {
           {/* OSM road network within 1 km buffer */}
           {overlays.road_network && roadNetwork && (
             <GeoJSON
-              key="road-network"
+              key={`road-network-${blinkKey("road_network")}`}
               data={roadNetwork}
+              {...blinkGeoJson("road_network")}
               style={(feature) => {
                 const hw =
                   (feature?.properties as { highway?: string } | undefined)?.highway ?? "unknown";
                 const s = highwayStyle(hw);
-                return {
+                return withBlink("road_network", {
                   color: s.color,
                   weight: s.weight,
                   opacity: 0.9,
-                };
+                });
               }}
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as {
@@ -1970,9 +2138,10 @@ export default function MapExplorer() {
           {/* Railway lines */}
           {overlays.railway_lines && railwayLines && (
             <GeoJSON
-              key="railway-lines"
+              key={`railway-lines-${blinkKey("railway_lines")}`}
               data={railwayLines}
-              style={() => ({ ...RAILWAY_LINE_STYLE })}
+              {...blinkGeoJson("railway_lines")}
+              style={() => withBlink("railway_lines", { ...RAILWAY_LINE_STYLE })}
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as {
                   id?: string;
@@ -2005,9 +2174,10 @@ export default function MapExplorer() {
           {/* Railway platforms */}
           {overlays.railway_platforms && railwayPlatforms && (
             <GeoJSON
-              key="railway-platforms"
+              key={`railway-platforms-${blinkKey("railway_platforms")}`}
               data={railwayPlatforms}
-              style={() => ({ ...RAILWAY_PLATFORM_STYLE })}
+              {...blinkGeoJson("railway_platforms")}
+              style={() => withBlink("railway_platforms", { ...RAILWAY_PLATFORM_STYLE })}
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as {
                   id?: string;
@@ -2058,9 +2228,10 @@ export default function MapExplorer() {
           {/* Transmission lines */}
           {overlays.transmission_lines && transmissionLines && (
             <GeoJSON
-              key="transmission-lines"
+              key={`transmission-lines-${blinkKey("transmission_lines")}`}
               data={transmissionLines}
-              style={() => ({ ...TRANSMISSION_LINE_STYLE })}
+              {...blinkGeoJson("transmission_lines")}
+              style={() => withBlink("transmission_lines", { ...TRANSMISSION_LINE_STYLE })}
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as {
                   id?: string;
@@ -2088,9 +2259,10 @@ export default function MapExplorer() {
           {/* Substations */}
           {overlays.substations && substations && (
             <GeoJSON
-              key="substations"
+              key={`substations-${blinkKey("substations")}`}
               data={substations}
-              style={() => ({ ...SUBSTATION_STYLE })}
+              {...blinkGeoJson("substations")}
+              style={() => withBlink("substations", { ...SUBSTATION_STYLE })}
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as { id?: string; name?: string };
                 const title = props.name || "Substation";
@@ -2202,14 +2374,17 @@ export default function MapExplorer() {
           {/* Waterways + water bodies (same layer toggle) */}
           {overlays.water_bodies && waterBodies && (
             <GeoJSON
-              key={`water-bodies-${waterBodies.source_file ?? "legacy"}-${waterBodies.count}`}
+              key={`water-bodies-${waterBodies.source_file ?? "legacy"}-${waterBodies.count}-${blinkKey("water_bodies")}`}
               data={waterBodies}
-              style={() => ({
-                color: "#0369a1",
-                weight: 1.25,
-                fillColor: "#38bdf8",
-                fillOpacity: 0.35,
-              })}
+              {...blinkGeoJson("water_bodies")}
+              style={() =>
+                withBlink("water_bodies", {
+                  color: "#0369a1",
+                  weight: 1.25,
+                  fillColor: "#38bdf8",
+                  fillOpacity: 0.35,
+                })
+              }
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as {
                   id?: string;
@@ -2226,14 +2401,17 @@ export default function MapExplorer() {
           )}
           {overlays.water_bodies && waterways && (
             <GeoJSON
-              key={`waterways-${waterways.source_file ?? "legacy"}-${waterways.count}`}
+              key={`waterways-${waterways.source_file ?? "legacy"}-${waterways.count}-${blinkKey("water_bodies")}`}
               data={waterways}
-              style={() => ({
-                color: "#075985",
-                weight: 1.75,
-                fillColor: "#0ea5e9",
-                fillOpacity: 0.45,
-              })}
+              {...blinkGeoJson("water_bodies")}
+              style={() =>
+                withBlink("water_bodies", {
+                  color: "#075985",
+                  weight: 1.75,
+                  fillColor: "#0ea5e9",
+                  fillOpacity: 0.45,
+                })
+              }
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as {
                   id?: string;
@@ -2252,14 +2430,17 @@ export default function MapExplorer() {
           {/* Villages */}
           {overlays.villages && villagesData && (
             <GeoJSON
-              key="villages"
+              key={`villages-${blinkKey("villages")}`}
               data={villagesData}
-              style={() => ({
-                color: "#a16207",
-                weight: 1.5,
-                fillColor: "#ca8a04",
-                fillOpacity: 0.28,
-              })}
+              {...blinkGeoJson("villages")}
+              style={() =>
+                withBlink("villages", {
+                  color: "#a16207",
+                  weight: 1.5,
+                  fillColor: "#ca8a04",
+                  fillOpacity: 0.28,
+                })
+              }
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as {
                   id?: string;
@@ -2297,17 +2478,18 @@ export default function MapExplorer() {
           {/* LULC (land use / land cover) */}
           {overlays.lulc && lulcData && (
             <GeoJSON
-              key={`lulc-${lulcData.source_file ?? "legacy"}-${lulcData.count}`}
+              key={`lulc-${lulcData.source_file ?? "legacy"}-${lulcData.count}-${blinkKey("lulc")}`}
               data={lulcData}
+              {...blinkGeoJson("lulc")}
               style={(feature) => {
                 const color =
                   (feature?.properties as { color?: string } | undefined)?.color ?? "#94a3b8";
-                return {
+                return withBlink("lulc", {
                   color,
                   weight: 1,
                   fillColor: color,
                   fillOpacity: 0.4,
-                };
+                });
               }}
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as {
@@ -2324,18 +2506,65 @@ export default function MapExplorer() {
             />
           )}
 
+          {/* Barren land parcels */}
+          {overlays.barren_land && barrenLand && (
+            <GeoJSON
+              key={`barren-${barrenLand.source_file ?? "legacy"}-${barrenLand.count}-${blinkKey("barren_land")}`}
+              data={barrenLand}
+              {...blinkGeoJson("barren_land")}
+              style={withBlink("barren_land", {
+                color: barrenLand.color,
+                weight: 1,
+                fillColor: barrenLand.color,
+                fillOpacity: 0.45,
+              })}
+              onEachFeature={(feature, layer) => {
+                const props = feature.properties as {
+                  id?: string;
+                  area_ha?: number | null;
+                  area_acre?: number | null;
+                };
+                const areaHa =
+                  props.area_ha != null ? `${props.area_ha.toFixed(4)} ha` : "";
+                const areaAcre =
+                  props.area_acre != null ? ` · ${props.area_acre.toFixed(4)} acre` : "";
+                layer.bindTooltip(
+                  `<span class="font-semibold">Barren Land</span><br/>` +
+                    `<span class="text-slate-400">${props.id ?? ""}</span><br/>` +
+                    `<span class="text-slate-400">${areaHa}${areaAcre}</span>`,
+                  { direction: "top", opacity: 0.95, className: "geovision-tooltip" },
+                );
+              }}
+            />
+          )}
+
           {/* Trees (emoji markers) */}
           {overlays.trees && treesData && treesData.trees.length > 0 && (
-            <TreesLayer trees={treesData.trees} interactive={!measure} />
+            <TreesLayer
+              trees={treesData.trees}
+              interactive={!measure}
+              blink={expandedActiveLayerId === "trees"}
+            />
           )}
 
           {/* Ground contours */}
-          {overlays.contours_1m && contours1m && <ContoursLayer data={contours1m} weight={1.4} />}
+          {overlays.contours_1m && contours1m && (
+            <ContoursLayer
+              data={contours1m}
+              weight={1.4}
+              blink={expandedActiveLayerId === "contours_1m"}
+            />
+          )}
           {overlays.contours_0_5m && contours05m && (
-            <ContoursLayer data={contours05m} weight={1.1} opacity={0.75} />
+            <ContoursLayer
+              data={contours05m}
+              weight={1.1}
+              opacity={0.75}
+              blink={expandedActiveLayerId === "contours_0_5m"}
+            />
           )}
 
-          {/* Flood water / inundation points for selected date */}
+          {/* Flood water / inundation heat map for selected date */}
           {overlays.flood && floodScene && <FloodLayer scene={floodScene} />}
 
           {/* Ground scour screening (Design HFL workbook) */}
@@ -2351,17 +2580,21 @@ export default function MapExplorer() {
               />
               {groundScour.features.map((f) => (
                 <Polyline
-                  key={f.properties.id}
+                  key={`${f.properties.id}-${blinkKey("ground_scour")}`}
                   positions={f.geometry.coordinates.map(
                     ([lon, lat]) => [lat, lon] as [number, number],
                   )}
                   pathOptions={{
                     color: groundScourZoneColor(f.properties.hydraulic_zone),
-                    weight: 5,
+                    weight: expandedActiveLayerId === "ground_scour" ? 7 : 5,
                     opacity: 0.85,
                     lineCap: "round",
                     lineJoin: "round",
                     interactive: false,
+                    className:
+                      expandedActiveLayerId === "ground_scour"
+                        ? "active-layer-blink"
+                        : undefined,
                   }}
                   renderer={groundScourSvgRenderer}
                 />
@@ -2369,9 +2602,10 @@ export default function MapExplorer() {
               {groundScour.points.map((p) => {
                 const fill = groundScourDepthColor(p.scour_max_m);
                 const active = hoveredGroundScour?.id === p.id;
+                const blink = expandedActiveLayerId === "ground_scour";
                 return (
                   <CircleMarker
-                    key={`gs-${p.id}`}
+                    key={`gs-${p.id}-${blink ? "blink" : "steady"}`}
                     center={[p.latitude, p.longitude]}
                     radius={active ? 9 : 7}
                     pane="markerPane"
@@ -2382,6 +2616,7 @@ export default function MapExplorer() {
                       fillColor: fill,
                       fillOpacity: 1,
                       interactive: false,
+                      className: blink ? "active-layer-marker-blink" : undefined,
                     }}
                   />
                 );
@@ -2422,17 +2657,20 @@ export default function MapExplorer() {
                 }
                 if (cur.length > 1) segments.push(cur);
 
+                const rfBlink = expandedActiveLayerId === "road_formation";
                 return segments.map((positions, si) => (
                   <Polyline
-                    key={`rf-${branch.id}-${si}`}
+                    key={`rf-${branch.id}-${si}-${rfBlink ? "blink" : "steady"}`}
                     positions={positions}
+                    {...(rfBlink ? { renderer: blinkSvgRenderer } : {})}
                     pathOptions={{
                       color,
-                      weight: branch.id === "centerline" ? 4 : 3,
+                      weight: (branch.id === "centerline" ? 4 : 3) + (rfBlink ? 2 : 0),
                       opacity: 0.9,
                       dashArray: branch.id === "centerline" ? undefined : "8 6",
                       lineCap: "round",
                       lineJoin: "round",
+                      className: rfBlink ? "active-layer-blink" : undefined,
                     }}
                   >
                     <Tooltip sticky opacity={0.95} className="geovision-tooltip">
@@ -2461,14 +2699,17 @@ export default function MapExplorer() {
           {/* Structures within acquisition boundary (building footprints) */}
           {overlays.affected_houses && affectedHouses && (
             <GeoJSON
-              key={`affected-houses-${affectedHouses.source_file ?? "legacy"}-${affectedHouses.count}`}
+              key={`affected-houses-${affectedHouses.source_file ?? "legacy"}-${affectedHouses.count}-${blinkKey("affected_houses")}`}
               data={affectedHouses}
-              style={() => ({
-                color: "#ef4444",
-                weight: 1,
-                fillColor: "#ef4444",
-                fillOpacity: 0.35,
-              })}
+              {...blinkGeoJson("affected_houses")}
+              style={() =>
+                withBlink("affected_houses", {
+                  color: "#ef4444",
+                  weight: 1,
+                  fillColor: "#ef4444",
+                  fillOpacity: 0.35,
+                })
+              }
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as {
                   id?: string;
@@ -2495,17 +2736,23 @@ export default function MapExplorer() {
           {overlays.boreholes &&
             boreholes.map((bh, i) => {
               const s = boreholeSummary(bh);
+              const bhBlink = expandedActiveLayerId === "boreholes";
               return (
                 <CircleMarker
-                  key={"bh" + i}
+                  key={"bh" + i + (bhBlink ? "-blink" : "-steady")}
                   center={[bh.lat as number, bh.lon as number]}
-                  radius={7}
+                  radius={bhBlink ? 9 : 7}
+                  {...(bhBlink ? { renderer: blinkSvgRenderer } : {})}
                   pathOptions={{
                     color: "#ffffff",
                     fillColor: s.hasData ? "#a855f7" : "#7c6f9c",
                     fillOpacity: 0.9,
                     weight: 2,
-                    className: s.hasData ? "geovision-marker" : undefined,
+                    className: bhBlink
+                      ? "active-layer-marker-blink"
+                      : s.hasData
+                        ? "geovision-marker"
+                        : undefined,
                   }}
                   eventHandlers={
                     !measure && s.hasData ? { click: () => setSelectedBorehole(bh) } : undefined
@@ -2600,14 +2847,14 @@ export default function MapExplorer() {
                   activeLayersOpen ? "min-h-0 max-h-full flex-1" : "shrink-0"
                 }`}
               >
-                <button
+            <button
                   type="button"
-                  onClick={() => {
+              onClick={() => {
                     setActiveLayersOpen((v) => {
                       if (v) setExpandedActiveLayerId(null);
-                      return !v;
-                    });
-                  }}
+                  return !v;
+                });
+              }}
                   className="mb-0 flex w-full shrink-0 items-center justify-between gap-2 px-1 text-left"
                 >
                   <h3 className="text-xs font-bold uppercase tracking-wide text-slate-300">
@@ -2664,7 +2911,7 @@ export default function MapExplorer() {
                               open ? "rotate-180" : ""
                             }`}
                           />
-                        </button>
+            </button>
                         {open && (
                           <div className="border-t border-white/10 px-2 pb-2 pt-2">
                             {item.id === "alignment" && alignmentSummary ? (
@@ -2675,6 +2922,8 @@ export default function MapExplorer() {
                               <ServiceRoadCard info={serviceRoadSummary} compact />
                             ) : item.id === "sb_re_walls" && reWallSummary ? (
                               <ReWallCard info={reWallSummary} compact />
+                            ) : item.id === "sb_ramps" && interchangeSummary ? (
+                              <InterchangeCard info={interchangeSummary} compact />
                             ) : item.id === "sb_drains" && drainSummary ? (
                               <DrainCard info={drainSummary} compact />
                             ) : item.id === "sb_paved_shoulders" && shoulderSummary ? (
@@ -2708,30 +2957,18 @@ export default function MapExplorer() {
                                 {item.description || "Layer is active on the map."}
                               </p>
                             )}
-                          </div>
+          </div>
                         )}
-                      </div>
+          </div>
                     );
                   })}
-                </div>
-                )}
+              </div>
+            )}
               </div>
             )}
               </>
             )}
-          </div>
-
-          {overlays.alignment && alignmentSummary && (
-            <div className="pointer-events-auto absolute bottom-6 right-4 z-[600] max-w-xs rounded-xl border border-white/10 bg-ink-950/90 px-3 py-2.5 text-xs text-slate-300 shadow-xl backdrop-blur-xl">
-              <div className="font-semibold text-white">
-                Length: {alignmentSummary.totalLengthKm.toFixed(2)} km
-              </div>
-              <div className="mt-1 text-slate-400">
-                Chainage: CH {formatChainage(alignmentSummary.startChainageKm)} to CH{" "}
-                {formatChainage(alignmentSummary.endChainageKm)}
-              </div>
-            </div>
-          )}
+        </div>
 
           {/* tools + readouts — centre bottom, horizontal */}
           <div className="pointer-events-auto absolute bottom-6 left-1/2 z-[600] flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2">
@@ -2739,13 +2976,13 @@ export default function MapExplorer() {
             <div className="pointer-events-none flex flex-wrap items-center justify-center gap-2">
               <div className="glass rounded-lg px-3 py-1.5 text-xs text-slate-200">
                 {mapScaleLabel}
-              </div>
+            </div>
               {cursor && (
                 <div className="glass flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-slate-200">
                   <Crosshair className="h-3.5 w-3.5 text-brand-400" />
                   {cursor[0].toFixed(5)}, {cursor[1].toFixed(5)}
-                </div>
-              )}
+              </div>
+            )}
               {measureTool && measureResult && (
                 <div className="glass pointer-events-auto max-w-xs rounded-lg px-3 py-1.5 text-xs text-rose-300">
                   <div className="flex items-center justify-between gap-2">
@@ -2762,7 +2999,7 @@ export default function MapExplorer() {
                       >
                         <Undo2 className="h-3.5 w-3.5" />
                       </button>
-                      <button
+                    <button
                         type="button"
                         disabled={!canMeasureRedo}
                         onClick={redoMeasure}
@@ -2770,7 +3007,7 @@ export default function MapExplorer() {
                         className="rounded-md p-1 text-rose-200 transition enabled:hover:bg-white/10 disabled:opacity-30"
                       >
                         <Redo2 className="h-3.5 w-3.5" />
-                      </button>
+                    </button>
                     </div>
                   </div>
                   {measureResult.lines.map((line, i) => (
@@ -2784,7 +3021,7 @@ export default function MapExplorer() {
                 <div className="glass flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-sky-300">
                   <span className="h-2 w-4 rounded-sm bg-sky-400" />
                   Blue roads = Street View available
-                </div>
+                  </div>
               )}
             </div>
             )}
@@ -2801,7 +3038,7 @@ export default function MapExplorer() {
                   <div className="glass absolute bottom-12 left-1/2 z-[900] w-52 -translate-x-1/2 overflow-hidden rounded-xl border border-white/15 text-left shadow-xl">
                     <div className="border-b border-white/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
                       Measure tools
-                    </div>
+                </div>
                     {MEASURE_TOOLS.map((t) => {
                       const Icon =
                         t.id === "distance"
@@ -2811,7 +3048,7 @@ export default function MapExplorer() {
                             : t.id === "bearing"
                               ? Compass
                               : Mountain;
-                      return (
+                return (
                         <button
                           key={t.id}
                           type="button"
@@ -2837,8 +3074,8 @@ export default function MapExplorer() {
                         Exit measure
                       </button>
                     )}
-                  </div>
-                )}
+                      </div>
+                    )}
                 {measure && (
                   <>
                     <ToolBtn
@@ -2872,15 +3109,15 @@ export default function MapExplorer() {
                 >
                   <Ruler className="h-4 w-4" />
                 </ToolBtn>
-              </div>
+                      </div>
                 </>
               )}
               <ToolBtn onClick={() => document.documentElement.requestFullscreen?.()} title="Fullscreen">
                 <Maximize2 className="h-4 w-4" />
               </ToolBtn>
             </div>
-          </div>
-        </div>
+                </div>
+              </div>
         </div>
 
         {showElevation && elevationGraphPoints.length > 0 && (
@@ -2974,7 +3211,7 @@ export default function MapExplorer() {
               <GroundScourPointCard point={hoveredGroundScour} />
             </div>,
             document.body,
-          )}
+        )}
       </div>
       </div>
     </div>
@@ -3501,13 +3738,23 @@ function GroundScourPointCard({ point }: { point: GroundScourPoint }) {
   const Metric = ({
     label,
     value,
+    highlight = false,
   }: {
     label: string;
     value: string;
+    highlight?: boolean;
   }) => (
-    <div className="min-w-0 rounded-md bg-white/[0.03] px-2 py-1.5">
-      <div className="truncate text-[9px] uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-0.5 truncate text-[11px] font-semibold tabular-nums text-slate-100">
+    <div
+      className={`min-w-0 rounded-md px-2 py-1.5 ${
+        highlight ? "bg-amber-400/10 ring-1 ring-amber-400/40" : "bg-white/[0.03]"
+      }`}
+    >
+      <div className="text-[9px] uppercase leading-tight tracking-wide text-slate-500">{label}</div>
+      <div
+        className={`mt-0.5 truncate font-semibold tabular-nums ${
+          highlight ? "text-[15px] text-amber-300" : "text-[11px] text-slate-100"
+        }`}
+      >
         {value}
       </div>
     </div>
@@ -3562,20 +3809,25 @@ function GroundScourPointCard({ point }: { point: GroundScourPoint }) {
         <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">
           Hydraulics
         </div>
-        <div className="grid grid-cols-3 gap-1.5">
+        <div className="grid grid-cols-2 gap-1.5">
           <Metric
             label="Seasons wet"
             value={
               point.seasons_wet_of_4 != null ? `${point.seasons_wet_of_4}/4` : "—"
             }
           />
-          <Metric label="D Pre" value={`${fmt(point.d_pre_m, 3)} m`} />
-          <Metric label="D Post" value={`${fmt(point.d_post_m, 3)} m`} />
-          <Metric label="V Pre" value={`${fmt(point.v_pre_ms, 3)} m/s`} />
-          <Metric label="V Post" value={`${fmt(point.v_post_ms, 3)} m/s`} />
-          <Metric label="q Post" value={`${fmt(point.q_post_m3sm, 4)}`} />
+          <Metric label="Depth, Pre-monsoon" value={`${fmt(point.d_pre_m, 3)} m`} />
+          <Metric
+            label="Depth, Post-monsoon / Design Flood"
+            value={`${fmt(point.d_post_m, 3)} m`}
+          />
+          <Metric label="Velocity, Pre-monsoon" value={`${fmt(point.v_pre_ms, 3)} m/s`} />
+          <Metric label="Velocity, Post-monsoon" value={`${fmt(point.v_post_ms, 3)} m/s`} />
+          <Metric
+            label="Unit Discharge, Post-monsoon"
+            value={`${fmt(point.q_post_m3sm, 4)} m³/s/m`}
+          />
         </div>
-        <div className="mt-1 text-[9px] text-slate-500">q Post unit: m³/s/m</div>
       </div>
 
       <div>
@@ -3583,10 +3835,10 @@ function GroundScourPointCard({ point }: { point: GroundScourPoint }) {
           Scour & design HFL
         </div>
         <div className="grid grid-cols-3 gap-1.5">
-          <Metric label="Scour min" value={`${fmt(point.scour_min_m)} m`} />
-          <Metric label="Scour max" value={`${fmt(point.scour_max_m)} m`} />
+          <Metric label="Scour Depth, Minimum" value={`${fmt(point.scour_min_m)} m`} highlight />
+          <Metric label="Scour Depth, Maximum" value={`${fmt(point.scour_max_m)} m`} highlight />
           <Metric
-            label="Design HFL"
+            label="Design High Flood Level"
             value={`${fmt(point.design_hfl_continuous_m)} m`}
           />
         </div>
@@ -3763,7 +4015,7 @@ function ReWallCard({
   info,
   compact = false,
 }: {
-  info: ReWallInfo;
+  info: ReWallLocationSummary;
   compact?: boolean;
 }) {
   const accent = "#f97316";
@@ -3792,46 +4044,78 @@ function ReWallCard({
         style={{ backgroundColor: accent }}
       />
       <div className="space-y-1.5 text-[10px]">
-        <Row label="Total Sections" value={String(info.totalSections)} />
+        <Row label="RE Wall Locations" value={String(info.count)} />
+        <Row label="Total Coverage" value={`${info.totalCoverageKm.toFixed(3)} km`} />
+        {info.fromKm != null && info.toKm != null && (
+          <Row label="Chainage Span" value={`Ch ${info.fromKm}–${info.toKm} km`} />
+        )}
+
+        <div className="border-t border-white/10 pt-1.5">
+          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-orange-300">
+            Segments
+          </div>
+          <div className="max-h-40 space-y-1 overflow-y-auto pl-1.5">
+            {info.segments.map((s) => (
+              <div key={s.name} className="flex justify-between gap-2 text-slate-400">
+                <span className="truncate">
+                  •{" "}
+                  {s.fromKm != null && s.toKm != null
+                    ? `Ch ${s.fromKm}–${s.toKm}`
+                    : s.name}
+                </span>
+                <span className="shrink-0 tabular-nums font-semibold text-slate-100">
+                  {s.lengthKm != null ? `${s.lengthKm.toFixed(3)} km` : "—"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InterchangeCard({
+  info,
+  compact = false,
+}: {
+  info: InterchangeSummary;
+  compact?: boolean;
+}) {
+  const accent = "#eab308";
+
+  const Row = ({ label, value }: { label: string; value: string }) => (
+    <div className="flex justify-between gap-2">
+      <span className="text-slate-400">{label}</span>
+      <span className="tabular-nums font-semibold text-slate-100">{value}</span>
+    </div>
+  );
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-yellow-400/25 bg-yellow-500/5 p-2"
+          : "rounded-xl border border-yellow-400/35 bg-yellow-500/10 p-2.5"
+      }
+    >
+      <div
+        className={
+          compact
+            ? "mb-2 h-1.5 w-full shrink-0 rounded-full"
+            : "mb-2 h-3 w-full shrink-0 rounded-sm"
+        }
+        style={{ backgroundColor: accent }}
+      />
+      <div className="space-y-1.5 text-[10px]">
+        <Row label="Ramp Alignments" value={String(info.count)} />
         <Row label="Total Length" value={`${info.totalLengthKm.toFixed(3)} km`} />
-
-        <div className="border-t border-white/10 pt-1.5">
-          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-orange-300">
-            VUP Approaches
-          </div>
-          <div className="space-y-1 pl-1.5">
-            <div className="flex justify-between gap-2 text-slate-400">
-              <span>• Sections</span>
-              <span className="tabular-nums font-semibold text-slate-100">{info.vupSections}</span>
-            </div>
-            <div className="flex justify-between gap-2 text-slate-400">
-              <span>• Total Length</span>
-              <span className="tabular-nums font-semibold text-slate-100">
-                {info.vupLengthKm.toFixed(3)} km
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="border-t border-white/10 pt-1.5">
-          <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-orange-300">
-            Loop / Ramp
-          </div>
-          <div className="space-y-1 pl-1.5">
-            <div className="flex justify-between gap-2 text-slate-400">
-              <span>• Sections</span>
-              <span className="tabular-nums font-semibold text-slate-100">
-                {info.loopRampSections}
-              </span>
-            </div>
-            <div className="flex justify-between gap-2 text-slate-400">
-              <span>• Total Length</span>
-              <span className="tabular-nums font-semibold text-slate-100">
-                {info.loopRampLengthKm.toFixed(3)} km
-              </span>
-            </div>
-          </div>
-        </div>
+        {info.longestKm != null && (
+          <Row label="Longest Ramp" value={`${info.longestKm.toFixed(3)} km`} />
+        )}
+        {info.avgKm != null && (
+          <Row label="Average Length" value={`${info.avgKm.toFixed(3)} km`} />
+        )}
       </div>
     </div>
   );
@@ -4854,6 +5138,29 @@ function MapResizeOnPanel({ active }: { active: boolean }) {
     const timer = window.setTimeout(() => map.invalidateSize(), 150);
     return () => window.clearTimeout(timer);
   }, [active, map]);
+  return null;
+}
+
+/**
+ * Keeps Leaflet's cached size in sync with its container. Any layout change
+ * (sidebar toggle, flood / elevation panel, window resize) triggers a debounced
+ * invalidateSize so tiles fill the whole viewport instead of leaving blank areas.
+ */
+function MapAutoResize() {
+  const map = useMap();
+  useEffect(() => {
+    const container = map.getContainer();
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(() => map.invalidateSize({ animate: false }));
+    });
+    ro.observe(container);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [map]);
   return null;
 }
 

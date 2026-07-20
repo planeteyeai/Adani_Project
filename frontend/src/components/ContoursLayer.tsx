@@ -12,13 +12,15 @@ type Props = {
   /** Line weight in px. */
   weight?: number;
   opacity?: number;
+  /** Pulse/glow the layer while its active-layer card is open. */
+  blink?: boolean;
 };
 
 /**
  * Canvas contour overlay — draws only lines intersecting the viewport.
  * Coloured by elevation (blue → teal → amber).
  */
-export default function ContoursLayer({ data, weight = 1.25, opacity = 0.85 }: Props) {
+export default function ContoursLayer({ data, weight = 1.25, opacity = 0.85, blink = false }: Props) {
   const map = useMap();
   const lines = useMemo(() => contoursToLines(data), [data]);
   const elevMin = data.elev_min ?? 40;
@@ -27,7 +29,10 @@ export default function ContoursLayer({ data, weight = 1.25, opacity = 0.85 }: P
   useEffect(() => {
     if (!lines.length) return;
 
-    const canvas = L.DomUtil.create("canvas", "leaflet-zoom-animated") as HTMLCanvasElement;
+    const canvas = L.DomUtil.create(
+      "canvas",
+      `leaflet-zoom-animated${blink ? " active-layer-canvas-blink" : ""}`,
+    ) as HTMLCanvasElement;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -131,7 +136,7 @@ export default function ContoursLayer({ data, weight = 1.25, opacity = 0.85 }: P
       map.off("zoomanim", schedule);
       canvas.remove();
     };
-  }, [map, lines, elevMin, elevMax, weight, opacity]);
+  }, [map, lines, elevMin, elevMax, weight, opacity, blink]);
 
   return null;
 }

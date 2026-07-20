@@ -21,18 +21,41 @@ import {
 import {
   AlertTriangle,
   ArrowUpRight,
+  Building2,
   ChevronDown,
+  Droplets,
   IndianRupee,
   Layers,
   Mountain,
   Route,
+  Ruler,
+  Sprout,
+  Trees as TreesIcon,
   TriangleRight,
+  Waves,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { fetchMetrics, fetchProject } from "../lib/api";
 import { elevationToMetricsProfile, fetchElevationProfile } from "../lib/elevation";
 import { fetchGeotech, type GeotechData } from "../lib/geotech";
 import { fetchLulc, type LulcData } from "../lib/lulc";
+import {
+  fetchGroundScour,
+  groundScourZoneColor,
+  summarizeGroundScour,
+  type GroundScourData,
+} from "../lib/groundScour";
+import {
+  fetchRoadFormation,
+  summarizeRoadFormation,
+  ROAD_FORMATION_BRANCH_COLORS,
+  type RoadFormationData,
+} from "../lib/roadFormation";
+import { fetchBarrenLand, type BarrenLandData } from "../lib/barrenLand";
+import { fetchTrees, treesSummaryInfo, type TreesData } from "../lib/trees";
+import { fetchWaterBodies, fetchWaterways, type WaterBodiesData } from "../lib/waterBodies";
+import { fetchVillages, type VillagesData } from "../lib/villages";
+import { fetchFloodTimeseries, formatFloodDate, type FloodData } from "../lib/flood";
 import type { ScheduleB } from "../lib/scheduleB";
 import {
   SECTIONS,
@@ -50,7 +73,10 @@ type DataView =
   | "overview"
   | "elevation"
   | "earthwork"
-  | "land_use"
+  | "environment"
+  | "flood"
+  | "scour"
+  | "road_formation"
   | "slope_risk"
   | "structures"
   | "geotech";
@@ -59,7 +85,10 @@ const DATA_VIEWS: { id: DataView; label: string; hint: string }[] = [
   { id: "overview", label: "Overview", hint: "Key KPIs for the selected scope" },
   { id: "elevation", label: "Elevation Profile", hint: "Ground elevation along chainage" },
   { id: "earthwork", label: "Earth Balance", hint: "Cut, fill, borrow & waste" },
-  { id: "land_use", label: "Land Use / LULC", hint: "Land classification breakdown" },
+  { id: "environment", label: "Environment", hint: "LULC, barren land, trees, water & villages" },
+  { id: "flood", label: "Flood Risk", hint: "Satellite water & inundation over time" },
+  { id: "scour", label: "Scour & HFL", hint: "Predictive bridge scour & design HFL" },
+  { id: "road_formation", label: "Road Formation", hint: "Formation level vs ground elevation" },
   { id: "slope_risk", label: "Slope & Risk", hint: "Slope bands and risk radar" },
   { id: "structures", label: "Structures & Schedule-B", hint: "Inventory and engineering register" },
   { id: "geotech", label: "Geotechnical", hint: "Boreholes and soil tests" },
@@ -70,12 +99,28 @@ export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [geotech, setGeotech] = useState<GeotechData | null>(null);
   const [lulc, setLulc] = useState<LulcData | null>(null);
+  const [groundScour, setGroundScour] = useState<GroundScourData | null>(null);
+  const [roadFormation, setRoadFormation] = useState<RoadFormationData | null>(null);
+  const [barrenLand, setBarrenLand] = useState<BarrenLandData | null>(null);
+  const [trees, setTrees] = useState<TreesData | null>(null);
+  const [waterBodies, setWaterBodies] = useState<WaterBodiesData | null>(null);
+  const [waterways, setWaterways] = useState<WaterBodiesData | null>(null);
+  const [villages, setVillages] = useState<VillagesData | null>(null);
+  const [flood, setFlood] = useState<FloodData | null>(null);
   const [sectionId, setSectionId] = useState<number | null>(null);
   const [view, setView] = useState<DataView>("overview");
 
   useEffect(() => {
     fetchGeotech().then(setGeotech);
     fetchLulc().then(setLulc);
+    fetchGroundScour().then(setGroundScour);
+    fetchRoadFormation().then(setRoadFormation);
+    fetchBarrenLand().then(setBarrenLand);
+    fetchTrees().then(setTrees);
+    fetchWaterBodies().then(setWaterBodies);
+    fetchWaterways().then(setWaterways);
+    fetchVillages().then(setVillages);
+    fetchFloodTimeseries().then(setFlood);
     fetchProject("demo").then((p) => {
       setProject(p);
       Promise.all([fetchMetrics(p), fetchElevationProfile()]).then(([m, elev]) => {
@@ -125,6 +170,13 @@ export default function Dashboard() {
       : Object.entries(m.land_use).map(([name, value]) => ({ name, value }));
   const slopeData = Object.entries(m.slope_bands).map(([name, value]) => ({ name, value }));
   const riskData = Object.entries(m.risks).map(([subject, A]) => ({ subject, A }));
+
+  // Corridor-wide summaries for the newer datasets (not section-scoped).
+  const scour = summarizeGroundScour(groundScour);
+  const roadForm = summarizeRoadFormation(roadFormation);
+  const treesInfo = treesSummaryInfo(trees);
+  const floodPeaks = floodYearlyPeaks(flood);
+  const floodOverall = floodOverallPeaks(flood);
 
   return (
     <div className="min-h-screen bg-ink-950 pt-16">
@@ -225,23 +277,69 @@ export default function Dashboard() {
         )}
 
         {view === "overview" && (
-          <div className="mt-6 grid gap-4 lg:grid-cols-3">
-            <Panel title="Elevation Profile" className="lg:col-span-2">
-              <ElevationChart data={m.elevation_profile} />
-            </Panel>
-            <Panel title="Earthwork Balance">
-              <EarthworkChart data={earthworkData} />
-            </Panel>
-            <Panel title="Land Use / LULC">
-              <LandUseChart data={landUseData} />
-            </Panel>
-            <Panel title="Slope Distribution">
-              <SlopeChart data={slopeData} />
-            </Panel>
-            <Panel title="Risk Assessment">
-              <RiskChart data={riskData} />
-            </Panel>
-          </div>
+          <>
+            {/* Second KPI row — highlights from the environmental & hydraulic datasets */}
+            <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+              <Kpi
+                icon={<Waves className="h-5 w-5" />}
+                label="Peak flood extent"
+                value={floodOverall ? `${fmt(floodOverall.peakFlood)} ha` : "—"}
+                tint="text-sky-400"
+              />
+              <Kpi
+                icon={<AlertTriangle className="h-5 w-5" />}
+                label="Max bridge scour"
+                value={scour?.scourMaxM != null ? `${scour.scourMaxM.toFixed(2)} m` : "—"}
+                tint="text-rose-400"
+              />
+              <Kpi
+                icon={<Droplets className="h-5 w-5" />}
+                label="Design HFL (max)"
+                value={scour?.designHflMaxM != null ? `${scour.designHflMaxM.toFixed(2)} m` : "—"}
+                tint="text-cyan-400"
+              />
+              <Kpi
+                icon={<TreesIcon className="h-5 w-5" />}
+                label="Trees inventoried"
+                value={treesInfo ? treesInfo.totalTrees.toLocaleString() : "—"}
+                tint="text-emerald-400"
+              />
+              <Kpi
+                icon={<Sprout className="h-5 w-5" />}
+                label="Barren land"
+                value={
+                  barrenLand?.total_area_ha != null
+                    ? `${fmt(barrenLand.total_area_ha)} ha`
+                    : "—"
+                }
+                tint="text-amber-400"
+              />
+              <Kpi
+                icon={<Building2 className="h-5 w-5" />}
+                label="Villages"
+                value={villages ? String(villages.count) : "—"}
+                tint="text-violet-400"
+              />
+            </div>
+
+            <div className="mt-6 grid gap-4 lg:grid-cols-3">
+              <Panel title="Elevation Profile" className="lg:col-span-2">
+                <ElevationChart data={m.elevation_profile} />
+              </Panel>
+              <Panel title="Earthwork Balance">
+                <EarthworkChart data={earthworkData} />
+              </Panel>
+              <Panel title="Land Use / LULC">
+                <LandUseChart data={landUseData} />
+              </Panel>
+              <Panel title="Slope Distribution">
+                <SlopeChart data={slopeData} />
+              </Panel>
+              <Panel title="Risk Assessment">
+                <RiskChart data={riskData} />
+              </Panel>
+            </div>
+          </>
         )}
 
         {view === "elevation" && (
@@ -312,37 +410,306 @@ export default function Dashboard() {
           </div>
         )}
 
-        {view === "land_use" && (
-          <div className="mt-6 grid gap-4 lg:grid-cols-2">
-            <Panel title="Land Use Classification">
-              <LandUseChart data={landUseData} height={300} />
-            </Panel>
-            <Panel title="Class breakdown">
-              <div className="space-y-2">
-                {landUseData.map((row, i) => (
-                  <div
-                    key={row.name}
-                    className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-sm"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="h-2.5 w-2.5 rounded-sm"
-                        style={{
-                          background:
-                            "color" in row && row.color
-                              ? String(row.color)
-                              : COLORS[i % COLORS.length],
-                        }}
-                      />
-                      <span className="text-slate-300">{row.name}</span>
+        {view === "environment" && (
+          <div className="mt-6 space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+              <Kpi
+                icon={<Layers className="h-5 w-5" />}
+                label="LULC polygons"
+                value={lulc ? lulc.count.toLocaleString() : "—"}
+                tint="text-brand-400"
+              />
+              <Kpi
+                icon={<Ruler className="h-5 w-5" />}
+                label="LULC area"
+                value={
+                  lulc?.total_area_ha != null ? `${fmt(lulc.total_area_ha)} ha` : "—"
+                }
+                tint="text-teal-400"
+              />
+              <Kpi
+                icon={<Sprout className="h-5 w-5" />}
+                label="Barren land"
+                value={
+                  barrenLand
+                    ? `${barrenLand.count} · ${fmt(barrenLand.total_area_ha ?? 0)} ha`
+                    : "—"
+                }
+                tint="text-amber-400"
+              />
+              <Kpi
+                icon={<TreesIcon className="h-5 w-5" />}
+                label="Trees"
+                value={trees ? trees.count.toLocaleString() : "—"}
+                tint="text-emerald-400"
+              />
+              <Kpi
+                icon={<Droplets className="h-5 w-5" />}
+                label="Water / waterways"
+                value={`${waterBodies?.count ?? 0} / ${waterways?.count ?? 0}`}
+                tint="text-sky-400"
+              />
+              <Kpi
+                icon={<Building2 className="h-5 w-5" />}
+                label="Villages"
+                value={villages ? String(villages.count) : "—"}
+                tint="text-violet-400"
+              />
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Panel title="Land Use Classification (LULC)">
+                <LandUseChart data={landUseData} height={300} />
+              </Panel>
+              <Panel title="Class breakdown">
+                <div className="space-y-2">
+                  {landUseData.map((row, i) => (
+                    <div
+                      key={row.name}
+                      className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-sm"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 rounded-sm"
+                          style={{
+                            background:
+                              "color" in row && row.color
+                                ? String(row.color)
+                                : COLORS[i % COLORS.length],
+                          }}
+                        />
+                        <span className="text-slate-300">{row.name}</span>
+                      </div>
+                      <span className="tabular-nums text-white">
+                        {lulcClasses.length > 0 ? `${row.value} polygons` : `${row.value}%`}
+                      </span>
                     </div>
-                    <span className="tabular-nums text-white">
-                      {lulcClasses.length > 0 ? `${row.value} polygons` : `${row.value}%`}
-                    </span>
-                  </div>
-                ))}
+                  ))}
+                </div>
+              </Panel>
+            </div>
+
+            {treesInfo && (
+              <Panel title="Tree Inventory (within 50 m of corridor)">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                  <StatBox label="Total trees" value={treesInfo.totalTrees.toLocaleString()} />
+                  <StatBox label="Corridor zones" value={String(treesInfo.corridorZones)} />
+                  <StatBox
+                    label="Canopy area"
+                    value={`${fmt(treesInfo.totalCanopyAreaM2)} m²`}
+                  />
+                  <StatBox label="Avg height" value={`${treesInfo.avgHeightM} m`} />
+                  <StatBox label="Tallest" value={`${treesInfo.tallestM} m`} />
+                  <StatBox
+                    label="Largest canopy"
+                    value={`${fmt(treesInfo.largestCanopyM2)} m²`}
+                  />
+                </div>
+              </Panel>
+            )}
+          </div>
+        )}
+
+        {view === "flood" && (
+          <div className="mt-6 space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <Kpi
+                icon={<Waves className="h-5 w-5" />}
+                label="Observation dates"
+                value={flood ? flood.dates.length.toLocaleString() : "—"}
+                tint="text-sky-400"
+              />
+              <Kpi
+                icon={<Layers className="h-5 w-5" />}
+                label="Years covered"
+                value={floodOverall ? floodOverall.yearsLabel : "—"}
+                tint="text-brand-400"
+              />
+              <Kpi
+                icon={<AlertTriangle className="h-5 w-5" />}
+                label="Peak inundation"
+                value={floodOverall ? `${fmt(floodOverall.peakFlood)} ha` : "—"}
+                tint="text-orange-400"
+              />
+              <Kpi
+                icon={<Droplets className="h-5 w-5" />}
+                label="Peak water extent"
+                value={floodOverall ? `${fmt(floodOverall.peakWater)} ha` : "—"}
+                tint="text-cyan-400"
+              />
+            </div>
+
+            {flood ? (
+              <>
+                <Panel title="Water & Inundation Extent Over Time (ha)">
+                  <FloodTrendChart
+                    data={flood.timeseries.map((t) => ({
+                      date: t.date,
+                      water: t.water_area_ha ?? 0,
+                      flood: t.flood_area_ha ?? 0,
+                    }))}
+                  />
+                </Panel>
+                <Panel title="Yearly Peak Inundation vs Water Area (ha)">
+                  <YearlyFloodChart data={floodPeaks} />
+                </Panel>
+              </>
+            ) : (
+              <Panel title="Flood Risk">
+                <p className="text-sm text-slate-400">Flood time-series data unavailable.</p>
+              </Panel>
+            )}
+          </div>
+        )}
+
+        {view === "scour" && (
+          <div className="mt-6 space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+              <Kpi
+                icon={<AlertTriangle className="h-5 w-5" />}
+                label="Assessed points"
+                value={scour ? scour.pointCount.toLocaleString() : "—"}
+                tint="text-rose-400"
+              />
+              <Kpi
+                icon={<Route className="h-5 w-5" />}
+                label="Stretches"
+                value={scour ? String(scour.stretchCount) : "—"}
+                tint="text-brand-400"
+              />
+              <Kpi
+                icon={<Mountain className="h-5 w-5" />}
+                label="Scour max"
+                value={scour?.scourMaxM != null ? `${scour.scourMaxM.toFixed(2)} m` : "—"}
+                tint="text-orange-400"
+              />
+              <Kpi
+                icon={<Mountain className="h-5 w-5" />}
+                label="Scour min"
+                value={scour?.scourMinM != null ? `${scour.scourMinM.toFixed(2)} m` : "—"}
+                tint="text-amber-400"
+              />
+              <Kpi
+                icon={<Droplets className="h-5 w-5" />}
+                label="Design HFL range"
+                value={
+                  scour?.designHflMinM != null && scour?.designHflMaxM != null
+                    ? `${scour.designHflMinM.toFixed(1)}–${scour.designHflMaxM.toFixed(1)} m`
+                    : "—"
+                }
+                tint="text-cyan-400"
+              />
+              <Kpi
+                icon={<Ruler className="h-5 w-5" />}
+                label="Chainage"
+                value={
+                  scour?.fromKm != null && scour?.toKm != null
+                    ? `${scour.fromKm.toFixed(1)}–${scour.toKm.toFixed(1)} km`
+                    : "—"
+                }
+                tint="text-teal-400"
+              />
+            </div>
+
+            {groundScour && scour ? (
+              <div className="grid gap-4 lg:grid-cols-3">
+                <Panel title="Max Scour Depth Along Chainage" className="lg:col-span-2">
+                  <ScourChainageChart
+                    data={[...groundScour.points]
+                      .filter((p) => p.scour_max_m != null)
+                      .sort((a, b) => a.chainage_km - b.chainage_km)
+                      .map((p) => ({
+                        chainage_km: p.chainage_km,
+                        scour: p.scour_max_m ?? 0,
+                        hfl: p.design_hfl_continuous_m ?? 0,
+                      }))}
+                  />
+                </Panel>
+                <Panel title="Hydraulic Zone Distribution">
+                  <LandUseChart
+                    data={scour.zoneCounts.map((z) => ({
+                      name: z.zone,
+                      value: z.count,
+                      color: groundScourZoneColor(z.zone),
+                    }))}
+                    height={300}
+                  />
+                </Panel>
               </div>
-            </Panel>
+            ) : (
+              <Panel title="Scour & HFL">
+                <p className="text-sm text-slate-400">Bridge scour analysis data unavailable.</p>
+              </Panel>
+            )}
+          </div>
+        )}
+
+        {view === "road_formation" && (
+          <div className="mt-6 space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+              <Kpi
+                icon={<Route className="h-5 w-5" />}
+                label="Survey points"
+                value={roadForm ? roadForm.pointCount.toLocaleString() : "—"}
+                tint="text-brand-400"
+              />
+              <Kpi
+                icon={<Layers className="h-5 w-5" />}
+                label="Branches"
+                value={roadForm ? String(roadForm.branchCount) : "—"}
+                tint="text-violet-400"
+              />
+              <Kpi
+                icon={<Mountain className="h-5 w-5" />}
+                label="Formation level"
+                value={
+                  roadForm?.formationMinM != null && roadForm?.formationMaxM != null
+                    ? `${roadForm.formationMinM.toFixed(1)}–${roadForm.formationMaxM.toFixed(1)} m`
+                    : "—"
+                }
+                tint="text-orange-400"
+              />
+              <Kpi
+                icon={<TriangleRight className="h-5 w-5" />}
+                label="Ground level"
+                value={
+                  roadForm?.groundMinM != null && roadForm?.groundMaxM != null
+                    ? `${roadForm.groundMinM.toFixed(1)}–${roadForm.groundMaxM.toFixed(1)} m`
+                    : "—"
+                }
+                tint="text-teal-400"
+              />
+              <Kpi
+                icon={<Ruler className="h-5 w-5" />}
+                label="Chainage"
+                value={
+                  roadForm?.fromKm != null && roadForm?.toKm != null
+                    ? `${roadForm.fromKm.toFixed(1)}–${roadForm.toKm.toFixed(1)} km`
+                    : "—"
+                }
+                tint="text-cyan-400"
+              />
+              <Kpi
+                icon={<Mountain className="h-5 w-5" />}
+                label="Max embankment"
+                value={
+                  roadForm?.formationMaxM != null && roadForm?.groundMinM != null
+                    ? `${(roadForm.formationMaxM - roadForm.groundMinM).toFixed(1)} m`
+                    : "—"
+                }
+                tint="text-rose-400"
+              />
+            </div>
+
+            {roadFormation && roadFormation.branches.length > 0 ? (
+              <Panel title="Road Formation Level vs Ground Elevation">
+                <RoadFormationChart data={roadFormation} />
+              </Panel>
+            ) : (
+              <Panel title="Road Formation">
+                <p className="text-sm text-slate-400">Road formation data unavailable.</p>
+              </Panel>
+            )}
           </div>
         )}
 
@@ -821,6 +1188,236 @@ function RiskChart({
         <Tooltip contentStyle={tooltipStyle} />
       </RadarChart>
     </ResponsiveContainer>
+  );
+}
+
+type FloodYearRow = { year: string; peakFlood: number; peakWater: number };
+
+function floodYearlyPeaks(flood: FloodData | null): FloodYearRow[] {
+  if (!flood?.timeseries?.length) return [];
+  const byYear = new Map<string, { peakFlood: number; peakWater: number }>();
+  for (const t of flood.timeseries) {
+    const year = t.date.slice(0, 4);
+    const entry = byYear.get(year) ?? { peakFlood: 0, peakWater: 0 };
+    entry.peakFlood = Math.max(entry.peakFlood, t.flood_area_ha ?? 0);
+    entry.peakWater = Math.max(entry.peakWater, t.water_area_ha ?? 0);
+    byYear.set(year, entry);
+  }
+  return [...byYear.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([year, v]) => ({ year, peakFlood: v.peakFlood, peakWater: v.peakWater }));
+}
+
+function floodOverallPeaks(
+  flood: FloodData | null,
+): { peakFlood: number; peakWater: number; yearsLabel: string } | null {
+  if (!flood?.timeseries?.length) return null;
+  let peakFlood = 0;
+  let peakWater = 0;
+  for (const t of flood.timeseries) {
+    peakFlood = Math.max(peakFlood, t.flood_area_ha ?? 0);
+    peakWater = Math.max(peakWater, t.water_area_ha ?? 0);
+  }
+  const years = flood.dates.map((d) => d.slice(0, 4));
+  const yearsLabel = years.length ? `${years[0]}–${years[years.length - 1]}` : "—";
+  return { peakFlood, peakWater, yearsLabel };
+}
+
+function FloodTrendChart({
+  data,
+}: {
+  data: Array<{ date: string; water: number; flood: number }>;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <AreaChart data={data}>
+        <defs>
+          <linearGradient id="floodWater" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#0ea5e9" stopOpacity={0.5} />
+            <stop offset="100%" stopColor="#0ea5e9" stopOpacity={0} />
+          </linearGradient>
+          <linearGradient id="floodInund" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#f97316" stopOpacity={0.5} />
+            <stop offset="100%" stopColor="#f97316" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1a2540" />
+        <XAxis
+          dataKey="date"
+          stroke="#64748b"
+          fontSize={10}
+          minTickGap={40}
+          tickFormatter={(v) => String(v).slice(0, 4)}
+        />
+        <YAxis stroke="#64748b" fontSize={11} tickFormatter={fmt} unit="" />
+        <Tooltip
+          contentStyle={tooltipStyle}
+          labelFormatter={(v) => formatFloodDate(String(v))}
+          formatter={(val: number, name) => [
+            `${fmt(val)} ha`,
+            name === "water" ? "Water area" : "Inundation area",
+          ]}
+        />
+        <Legend
+          wrapperStyle={{ fontSize: 11, color: "#94a3b8" }}
+          formatter={(v) => (v === "water" ? "Water area" : "Inundation area")}
+        />
+        <Area
+          type="monotone"
+          dataKey="water"
+          stroke="#38bdf8"
+          strokeWidth={1.5}
+          fill="url(#floodWater)"
+        />
+        <Area
+          type="monotone"
+          dataKey="flood"
+          stroke="#fb923c"
+          strokeWidth={1.5}
+          fill="url(#floodInund)"
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+function YearlyFloodChart({ data }: { data: FloodYearRow[] }) {
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <BarChart data={data}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1a2540" />
+        <XAxis dataKey="year" stroke="#64748b" fontSize={11} />
+        <YAxis stroke="#64748b" fontSize={11} tickFormatter={fmt} />
+        <Tooltip
+          contentStyle={tooltipStyle}
+          formatter={(val: number, name) => [
+            `${fmt(val)} ha`,
+            name === "peakWater" ? "Peak water" : "Peak inundation",
+          ]}
+        />
+        <Legend
+          wrapperStyle={{ fontSize: 11, color: "#94a3b8" }}
+          formatter={(v) => (v === "peakWater" ? "Peak water" : "Peak inundation")}
+        />
+        <Bar dataKey="peakWater" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="peakFlood" fill="#f97316" radius={[4, 4, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+function ScourChainageChart({
+  data,
+}: {
+  data: Array<{ chainage_km: number; scour: number; hfl: number }>;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <AreaChart data={data}>
+        <defs>
+          <linearGradient id="scourFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#f43f5e" stopOpacity={0.5} />
+            <stop offset="100%" stopColor="#f43f5e" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1a2540" />
+        <XAxis
+          dataKey="chainage_km"
+          stroke="#64748b"
+          fontSize={11}
+          tickFormatter={(v) => `${Number(v).toFixed(0)}`}
+        />
+        <YAxis stroke="#64748b" fontSize={11} unit="m" />
+        <Tooltip
+          contentStyle={tooltipStyle}
+          labelFormatter={(v) => `Chainage ${Number(v).toFixed(3)} km`}
+          formatter={(val: number, name) => [
+            `${Number(val).toFixed(2)} m`,
+            name === "scour" ? "Max scour" : "Design HFL",
+          ]}
+        />
+        <Area
+          type="monotone"
+          dataKey="scour"
+          stroke="#f43f5e"
+          strokeWidth={2}
+          fill="url(#scourFill)"
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+function RoadFormationChart({ data }: { data: RoadFormationData }) {
+  // Merge branches into one chainage-keyed series set so ground + each formation
+  // branch can be compared on a single axis.
+  const rows = new Map<number, Record<string, number>>();
+  for (const branch of data.branches) {
+    for (const p of branch.points) {
+      const key = Math.round(p.chainage_km * 1000) / 1000;
+      const row = rows.get(key) ?? { chainage_km: key };
+      if (p.ground_elev_m != null) row.ground = p.ground_elev_m;
+      if (p.formation_level_m != null) row[branch.id] = p.formation_level_m;
+      rows.set(key, row);
+    }
+  }
+  const merged = [...rows.values()].sort((a, b) => a.chainage_km - b.chainage_km);
+
+  return (
+    <ResponsiveContainer width="100%" height={340}>
+      <AreaChart data={merged}>
+        <defs>
+          <linearGradient id="groundFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#38e1c6" stopOpacity={0.35} />
+            <stop offset="100%" stopColor="#38e1c6" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1a2540" />
+        <XAxis
+          dataKey="chainage_km"
+          stroke="#64748b"
+          fontSize={11}
+          tickFormatter={(v) => `${Number(v).toFixed(0)}`}
+        />
+        <YAxis stroke="#64748b" fontSize={11} unit="m" domain={["dataMin - 2", "dataMax + 2"]} />
+        <Tooltip
+          contentStyle={tooltipStyle}
+          labelFormatter={(v) => `Chainage ${Number(v).toFixed(3)} km`}
+          formatter={(val: number, name) => [`${Number(val).toFixed(2)} m`, String(name)]}
+        />
+        <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
+        <Area
+          type="monotone"
+          dataKey="ground"
+          name="Ground"
+          stroke="#38e1c6"
+          strokeWidth={2}
+          fill="url(#groundFill)"
+          connectNulls
+        />
+        {data.branches.map((b) => (
+          <Area
+            key={b.id}
+            type="monotone"
+            dataKey={b.id}
+            name={`Formation ${b.name}`}
+            stroke={ROAD_FORMATION_BRANCH_COLORS[b.id] ?? "#f59e0b"}
+            strokeWidth={1.75}
+            fill="none"
+            connectNulls
+          />
+        ))}
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+function StatBox({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-center">
+      <div className="text-lg font-bold text-white">{value}</div>
+      <div className="mt-0.5 text-[11px] leading-tight text-slate-400">{label}</div>
+    </div>
   );
 }
 

@@ -39,17 +39,23 @@ function treeTooltipHtml(t: TreePoint): string {
 export default function TreesLayer({
   trees,
   interactive = true,
+  blink = false,
 }: {
   trees: TreePoint[];
   /** When false (e.g. measure mode), skip hover tooltips. */
   interactive?: boolean;
+  /** Pulse/glow the layer while its active-layer card is open. */
+  blink?: boolean;
 }) {
   const map = useMap();
 
   useEffect(() => {
     if (!trees.length) return;
 
-    const canvas = L.DomUtil.create("canvas", "leaflet-zoom-animated") as HTMLCanvasElement;
+    const canvas = L.DomUtil.create(
+      "canvas",
+      `leaflet-zoom-animated${blink ? " active-layer-canvas-blink" : ""}`,
+    ) as HTMLCanvasElement;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -198,7 +204,7 @@ export default function TreesLayer({
       }
       canvas.remove();
     };
-  }, [map, trees, interactive]);
+  }, [map, trees, interactive, blink]);
 
   return null;
 }

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
-  Box,
   Layers,
   LayoutDashboard,
   MapPinned,
@@ -16,19 +15,34 @@ const LANDING_NAV = [
   { label: "Features", to: "/#features" },
   { label: "Map Explorer", to: "/explorer" },
   { label: "Dashboard", to: "/dashboard" },
-  { label: "Projects", to: "/projects" },
 ];
 
 const APP_NAV: { label: string; to: string; icon: LucideIcon }[] = [
   { label: "Map Explorer", to: "/explorer", icon: MapPinned },
   { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
-  { label: "Projects", to: "/projects", icon: Box },
   { label: "Reports", to: "/reports", icon: Layers },
 ];
 
 const APP_ROUTES = new Set(["/explorer", "/dashboard", "/projects", "/reports"]);
 
 function BrandMark() {
+  const loc = useLocation();
+  const isHome = loc.pathname === "/";
+
+  if (!isHome) {
+    return (
+      <Link to="/" className="flex items-center gap-1.5 shrink-0">
+        <img
+          src="/adani-logo.png"
+          alt="Adani"
+          className="-mr-4 h-20 w-auto object-contain"
+        />
+        <span className="h-7 w-px bg-white/25" aria-hidden />
+        <span className="text-xl font-light tracking-wide text-slate-300">Infra</span>
+      </Link>
+    );
+  }
+
   return (
     <Link to="/" className="flex items-center gap-2.5 shrink-0">
       <img

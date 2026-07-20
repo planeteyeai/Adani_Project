@@ -30,8 +30,8 @@ export type RoadFormationSeriesVisibility = {
 
 export const DEFAULT_ROAD_FORMATION_VISIBILITY: RoadFormationSeriesVisibility = {
   lhs: true,
-  centerline: true,
-  rhs: true,
+  centerline: false,
+  rhs: false,
   elevation: true,
   hfl: true,
 };

@@ -182,6 +182,13 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
     color: "#33a02c",
   },
   {
+    id: "barren_land",
+    name: "Barren Land",
+    description: "Barren-land parcels within the Digha–Koilwar 5 km zone",
+    group: "Environment",
+    color: "#c2853b",
+  },
+  {
     id: "trees",
     name: "Trees",
     description: "Tree inventory within 50 m of the corridor",
