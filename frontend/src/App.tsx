@@ -6,6 +6,7 @@ import Landing from "./pages/Landing";
 import MapExplorer from "./pages/MapExplorer";
 import Dashboard from "./pages/Dashboard";
 import Projects from "./pages/Projects";
+import Reports from "./pages/Reports";
 import { TopBarWeatherProvider } from "./lib/topBarWeather";
 
 function ScrollToHash() {
@@ -34,7 +35,7 @@ export default function App() {
           <Route path="/explorer" element={<MapExplorer />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/projects" element={<Projects />} />
-          <Route path="/reports" element={<Dashboard />} />
+          <Route path="/reports" element={<Reports />} />
         </Routes>
         {!isExplorer && <Footer />}
       </div>
