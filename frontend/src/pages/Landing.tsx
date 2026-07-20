@@ -16,7 +16,6 @@ export default function Landing() {
       <Hero />
       <Stats />
       <Features />
-      <CTA />
     </main>
   );
 }
@@ -28,8 +27,8 @@ function Hero() {
       <div className="absolute inset-0 bg-grid opacity-40" />
       <div className="absolute inset-0 bg-gradient-to-b from-transparent via-ink-950/40 to-ink-950" />
 
-      <div className="relative mx-auto grid min-h-screen max-w-7xl items-center gap-10 px-5 pt-28 pb-16 lg:grid-cols-2">
-        <div>
+      <div className="relative mx-auto grid min-h-screen max-w-7xl items-center gap-12 px-5 pt-28 pb-16 lg:grid-cols-2 lg:gap-16">
+        <div className="max-w-xl lg:max-w-none">
           <motion.span
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
@@ -45,8 +44,8 @@ function Hero() {
             variants={fade}
             className="mt-5 text-4xl font-extrabold leading-[1.05] tracking-tight md:text-6xl"
           >
-            AI Powered <span className="gradient-text">Satellite-Based Planning</span> for
-            Next-Generation Infrastructure
+            Next-Generation Road Planning Using{" "}
+            <span className="gradient-text">AI &amp; Satellite Intelligence</span>
           </motion.h1>
 
           <motion.p
@@ -56,9 +55,9 @@ function Hero() {
             variants={fade}
             className="mt-6 max-w-xl text-lg text-slate-300"
           >
-            Generate engineering-grade planning reports within minutes using satellite data, GIS
-            intelligence, AI, DEMs and remote sensing — from raw imagery to construction-ready
-            deliverables.
+            Reduce survey time and planning uncertainty with automated analysis of terrain, flood
+            zones, elevation, road formation levels, earthwork quantities, and environmental
+            constraints.
           </motion.p>
 
           <motion.div
@@ -90,7 +89,7 @@ function Hero() {
           </motion.div>
         </div>
 
-        <div className="relative">
+        <div className="relative mx-auto w-full max-w-lg lg:max-w-none lg:justify-self-end">
           <HeroGlobe />
         </div>
       </div>
@@ -101,7 +100,7 @@ function Hero() {
 function Stats() {
   return (
     <section className="border-y border-white/10 bg-ink-900/50">
-      <div className="mx-auto grid max-w-7xl grid-cols-2 gap-6 px-5 py-12 md:grid-cols-4">
+      <div className="mx-auto grid max-w-5xl grid-cols-1 gap-8 px-5 py-12 sm:grid-cols-3">
         {STATS.map((s, i) => (
           <motion.div
             key={s.label}
@@ -112,7 +111,7 @@ function Stats() {
             variants={fade}
             className="text-center"
           >
-            <div className="text-4xl font-extrabold gradient-text">{s.value}</div>
+            <div className="text-4xl font-extrabold gradient-text md:text-5xl">{s.value}</div>
             <div className="mt-2 text-sm text-slate-400">{s.label}</div>
           </motion.div>
         ))}
@@ -145,17 +144,18 @@ function Features() {
       <SectionHead
         tag="Core Features"
         title={<>Engineering-grade <span className="gradient-text">analysis modules</span></>}
-        sub="Everything from EGL and contours to cut/fill, flood, soil and AI alignment optimisation."
+        sub="Elevation, contours, cut/fill, flood, land use, soil, alignment, haul planning, and dashboard analytics."
       />
-      <div className="mt-14 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-14 grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
         {FEATURES.map((f, i) => (
           <motion.div
             key={f.name}
             initial="hidden"
             whileInView="show"
             viewport={{ once: true }}
-            custom={i % 3}
+            custom={i % 5}
             variants={fade}
+            className="h-full"
           >
             <Link
               to={f.to}
@@ -175,29 +175,3 @@ function Features() {
   );
 }
 
-function CTA() {
-  return (
-    <section className="mx-auto max-w-7xl px-5 py-24">
-      <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-brand-600/20 via-ink-800 to-accent-500/20 p-10 text-center md:p-16">
-        <div className="absolute inset-0 bg-grid opacity-30" />
-        <div className="relative">
-          <h2 className="section-title mx-auto max-w-2xl">
-            Move from raw satellite imagery to construction-ready reports
-          </h2>
-          <p className="mx-auto mt-4 max-w-xl text-slate-300">
-            Explore the live demo on the real Digha–Koilwar Ganga Path alignment across satellite,
-            terrain, hybrid and topographic maps.
-          </p>
-          <div className="mt-8 flex flex-wrap justify-center gap-3">
-            <Link to="/explorer" className="btn-primary">
-              Launch Map Explorer <ArrowRight className="h-4 w-4" />
-            </Link>
-            <Link to="/dashboard" className="btn-ghost">
-              View Dashboard
-            </Link>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}

@@ -8,14 +8,11 @@ export const FEATURES = [
   { icon: "Layers3", name: "Soil & Geology", desc: "Soil type, bearing capacity, foundation recommendation, faults and seismic zone.", to: "/explorer?layers=boreholes" },
   { icon: "Split", name: "Alignment Optimisation", desc: "AI suggests shortest, lowest-earthwork, lowest-cost and lowest-risk routes.", to: "/explorer?layers=alignment,sb_ramps" },
   { icon: "Truck", name: "Haul & Borrow Planning", desc: "Vehicle routing, borrow-area and disposal-site recommendation with cost.", to: "/explorer?layers=barren_land,road_network" },
-  { icon: "Bot", name: "AI Assistant", desc: "Ask 'how much earthwork?', 'how many bridges?', 'suggest a better alignment'.", to: "/explorer?layers=alignment,structures" },
   { icon: "Gauge", name: "GIS Dashboard", desc: "Dark, modern widgets: length, elevation, slope, earthwork, structures, risk score.", to: "/dashboard" },
-  { icon: "FileBarChart", name: "16+ Report Types", desc: "Engineering, earthwork, flood, soil, utility, alignment, cost and carbon reports.", to: "/reports" },
 ] as const;
 
 export const STATS = [
   { value: "70%", label: "Less field survey time" },
   { value: "25%", label: "Lower earthwork cost" },
   { value: "10x", label: "Faster alignment studies" },
-  { value: "16+", label: "Automated report types" },
 ] as const;
