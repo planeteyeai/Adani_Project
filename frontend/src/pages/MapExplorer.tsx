@@ -1801,20 +1801,12 @@ export default function MapExplorer() {
                             Total fill{" "}
                             {cutFillSummary.fillM3 != null
                               ? `${(cutFillSummary.fillM3 / 1e6).toFixed(2)} Mm³`
-                              : "—"}{" "}
-                            · Cut{" "}
-                            {cutFillSummary.cutM3 != null
-                              ? `${cutFillSummary.cutM3.toLocaleString()} m³`
                               : "—"}
-                          </div>
-                          <div>
-                            TCS types: {cutFillSummary.tcsTypes.join(", ") || "—"}
                           </div>
                         </div>
                         <CutFillLegend
                           visibility={cutFillVisibility}
                           onVisibilityChange={setCutFillVisibility}
-                          tcsTypes={cutFillSummary.tcsTypes}
                         />
                       </div>
                     )}
@@ -4628,15 +4620,7 @@ function CutFillSummaryCard({
       value: info.rhsFillM3 != null ? `${(info.rhsFillM3 / 1e6).toFixed(2)} Mm³` : "—",
     },
     { label: "Total fill", value: fmtMm3(info.fillM3) },
-    {
-      label: "Cut volume",
-      value: info.cutM3 != null ? `${info.cutM3.toLocaleString()} m³` : "—",
-    },
     { label: "Net borrow", value: fmtMm3(info.netM3) },
-    {
-      label: "TCS types",
-      value: info.tcsTypes.length ? info.tcsTypes.join(", ") : "—",
-    },
   ];
 
   return (

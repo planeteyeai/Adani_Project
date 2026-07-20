@@ -5,10 +5,8 @@ import {
   CUT_FILL_BRANCH_META,
   CUT_FILL_CLASS_META,
   CUT_FILL_CLASS_ORDER,
-  CUT_FILL_TCS_COLORS,
   cutFillClassColor,
   cutFillClassLabel,
-  cutFillTcsColor,
   DEFAULT_CUT_FILL_VISIBILITY,
   type CutFillBranch,
   type CutFillBranchId,
@@ -25,7 +23,6 @@ export type CutFillMapPoint = {
   lon: number;
   segment: CutFillSegment;
   color: string;
-  isTcs: boolean;
   height: number | null;
 };
 
@@ -47,37 +44,36 @@ type Props = {
 
 function fmtVol(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return "—";
-  if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(2)} Mm³`;
-  if (Math.abs(v) >= 1_000) return `${(v / 1_000).toFixed(1)} k m³`;
-  return `${v.toFixed(0)} m³`;
+  return `${Math.round(v).toLocaleString()} m³`;
+}
+
+function fmtMass(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${Math.round(v).toLocaleString()} T`;
 }
 
 const M_PER_DEG_LAT = 110540;
 
 /**
- * Offset a chainage point perpendicular to the alignment by a fixed distance in
- * metres. Works in a local metric frame (longitude scaled by cos(lat)) so the
- * offset stays perpendicular and constant-width even on east–west stretches —
- * otherwise points drift off the road where the alignment bends.
+ * Offset a point perpendicular to the alignment by a fixed distance in metres,
+ * using the previous/next anchor points to estimate the local tangent. Works in
+ * a local metric frame (longitude scaled by cos(lat)) so the offset stays a
+ * true perpendicular and constant width even on east–west stretches.
  */
-function offsetLatLon(
-  resolve: (km: number) => [number, number] | null,
-  km: number,
+function offsetPerp(
+  anchor: [number, number],
+  prev: [number, number] | null,
+  next: [number, number] | null,
   offsetM: number,
-): { lat: number; lon: number } | null {
-  const mid = resolve(km);
-  if (!mid) return null;
-  const lon = mid[0];
-  const lat = mid[1];
+): { lat: number; lon: number } {
+  const [lat, lon] = anchor;
   if (!offsetM) return { lat, lon };
 
   const mPerDegLon = M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180);
-
-  // Tangent from a short segment centred on the point, in metres.
-  const a = resolve(Math.max(0, km - 0.03)) ?? mid;
-  const b = resolve(km + 0.03) ?? mid;
-  const tEast = (b[0] - a[0]) * mPerDegLon;
-  const tNorth = (b[1] - a[1]) * M_PER_DEG_LAT;
+  const a = prev ?? anchor;
+  const b = next ?? anchor;
+  const tEast = (b[1] - a[1]) * mPerDegLon;
+  const tNorth = (b[0] - a[0]) * M_PER_DEG_LAT;
   const len = Math.hypot(tEast, tNorth);
   if (len < 1e-6) return { lat, lon };
 
@@ -96,36 +92,27 @@ function expandBranchPoints(
   resolveChainage: (km: number) => [number, number] | null,
 ): CutFillMapPoint[] {
   const meta = CUT_FILL_BRANCH_META[branch.id];
-  const base =
+  const segments: CutFillSegment[] =
     branch.segments?.length > 0 ? branch.segments : branch.stretches ?? [];
 
-  const segments: CutFillSegment[] =
-    branch.id === "tcs"
-      ? base.flatMap((seg) => {
-          const step = 0.2;
-          const out: CutFillSegment[] = [];
-          for (let km = seg.from_km; km <= seg.to_km + 1e-9; km += step) {
-            const mid = Math.min(km, seg.to_km);
-            out.push({
-              ...seg,
-              id: `${seg.id}@${mid.toFixed(2)}`,
-              mid_km: Math.round(mid * 1000) / 1000,
-              from_km: mid,
-              to_km: Math.min(mid + step, seg.to_km),
-            });
-          }
-          return out.length ? out : [seg];
-        })
-      : base;
+  // Anchor lat/lon for each segment: prefer the coordinate embedded in the
+  // datasheet, fall back to chainage resolution.
+  const anchors: Array<[number, number] | null> = segments.map((seg) => {
+    if (seg.lat != null && seg.lon != null) return [seg.lat, seg.lon];
+    return resolveChainage(seg.mid_km);
+  });
 
   const points: CutFillMapPoint[] = [];
-  for (const segment of segments) {
-    const pos = offsetLatLon(resolveChainage, segment.mid_km, meta.offsetM);
-    if (!pos) continue;
-    const isTcs = branch.id === "tcs";
-    const color = isTcs
-      ? cutFillTcsColor(segment.tcs)
-      : cutFillClassColor(segment.class_id);
+  for (let i = 0; i < segments.length; i++) {
+    const anchor = anchors[i];
+    if (!anchor) continue;
+    const segment = segments[i];
+    const pos = offsetPerp(
+      anchor,
+      anchors[i - 1] ?? null,
+      anchors[i + 1] ?? null,
+      meta.offsetM,
+    );
     points.push({
       key: `${branch.id}-${segment.id}`,
       branchId: branch.id,
@@ -133,13 +120,8 @@ function expandBranchPoints(
       lat: pos.lat,
       lon: pos.lon,
       segment,
-      color,
-      isTcs,
-      height:
-        segment.height_cl_m ??
-        segment.avg_fill_height_m ??
-        segment.height_30m_m ??
-        null,
+      color: cutFillClassColor(segment.class_id),
+      height: segment.height_cl_m ?? segment.avg_fill_height_m ?? null,
     });
   }
   return points;
@@ -234,38 +216,19 @@ export function CutFillPointCard({
   point: CutFillMapPoint;
   compact?: boolean;
 }) {
-  const { segment, branchName, color, isTcs, height } = point;
-  const title = `Cut & Fill · ${branchName}${
-    isTcs && segment.tcs ? ` · ${segment.tcs}` : ""
-  }`;
-  const subtitle = isTcs
-    ? segment.tcs ?? "TCS range"
-    : cutFillClassLabel(segment.class_id);
+  const { segment, branchName, color, height } = point;
+  const title = `Cut & Fill · ${branchName}`;
+  const subtitle = cutFillClassLabel(segment.class_id);
 
   const rows: Array<{ label: string; value: string }> = [
     {
       label: "Chainage",
       value: `${segment.from_km.toFixed(3)}–${segment.to_km.toFixed(3)} km`,
     },
-    { label: "Side / series", value: branchName },
-    ...(isTcs
-      ? [
-          { label: "TCS type", value: segment.tcs ?? "—" },
-          {
-            label: "% of total fill",
-            value:
-              segment.pct_total_fill != null
-                ? `${segment.pct_total_fill.toFixed(1)}%`
-                : "—",
-          },
-        ]
-      : [
-          { label: "Class", value: cutFillClassLabel(segment.class_id) },
-          { label: "TCS", value: segment.tcs ?? "—" },
-        ]),
+    { label: "Side", value: branchName },
+    { label: "Fill class", value: cutFillClassLabel(segment.class_id) },
     { label: "Fill volume", value: fmtVol(segment.fill_m3) },
-    { label: "Cut volume", value: fmtVol(segment.cut_m3) },
-    { label: "Net (fill − cut)", value: fmtVol(segment.net_m3) },
+    { label: "Fill mass", value: fmtMass(segment.fill_mass_t) },
     {
       label: "Embankment height",
       value: height != null ? `${height.toFixed(2)} m` : "—",
@@ -303,11 +266,6 @@ export function CutFillPointCard({
           </div>
         ))}
       </dl>
-      {isTcs && segment.description ? (
-        <p className="mt-2 border-t border-white/10 pt-2 text-[10px] leading-snug text-slate-400">
-          {segment.description}
-        </p>
-      ) : null}
       {!compact && (
         <p className="mt-2 text-[10px] text-slate-500">
           Hover for preview · click to pin details
@@ -320,7 +278,6 @@ export function CutFillPointCard({
 export function CutFillLegend({
   visibility = DEFAULT_CUT_FILL_VISIBILITY,
   onVisibilityChange,
-  tcsTypes = [],
 }: {
   visibility?: CutFillSeriesVisibility;
   onVisibilityChange?: (next: CutFillSeriesVisibility) => void;
@@ -359,7 +316,7 @@ export function CutFillLegend({
       {(visibility.lhs || visibility.rhs) && (
         <div className="space-y-1">
           <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-            LHS / RHS · embankment height (points)
+            Embankment fill height (points)
           </div>
           {CUT_FILL_CLASS_ORDER.map((id) => {
             const meta = CUT_FILL_CLASS_META[id];
@@ -373,23 +330,6 @@ export function CutFillLegend({
               </div>
             );
           })}
-        </div>
-      )}
-
-      {visibility.tcs && tcsTypes.length > 0 && (
-        <div className="space-y-1">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-            TCS type (points)
-          </div>
-          {tcsTypes.map((tcs) => (
-            <div key={tcs} className="flex items-center gap-2 text-[10px] text-slate-400">
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-full"
-                style={{ background: CUT_FILL_TCS_COLORS[tcs] ?? "#a855f7" }}
-              />
-              {tcs}
-            </div>
-          ))}
         </div>
       )}
     </div>

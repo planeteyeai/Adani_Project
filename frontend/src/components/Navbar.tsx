@@ -54,11 +54,11 @@ function BrandMark() {
         Planet<span className="text-brand-400">Eye</span>
       </span>
       <span className="mx-1 h-8 w-px bg-white/20" aria-hidden />
-      <span className="rounded-md bg-white px-2 py-1">
+      <span className="rounded-md bg-white px-2.5 py-1">
         <img
-          src="/mitcon-logo.png"
+          src="/mitcon-logo.svg"
           alt="MITCON — Solutions for Sustainable Tomorrow"
-          className="h-7 w-auto object-contain"
+          className="h-10 w-auto object-contain"
         />
       </span>
     </Link>

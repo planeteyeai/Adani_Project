@@ -6,17 +6,20 @@ export type CutFillClassId =
   | "fill_6_8"
   | "fill_8_plus";
 
-export type CutFillBranchId = "lhs" | "rhs" | "tcs";
+export type CutFillBranchId = "lhs" | "rhs";
 
 export type CutFillSegment = {
   id: string;
   from_km: number;
   to_km: number;
   mid_km: number;
+  lat?: number | null;
+  lon?: number | null;
   length_m: number;
   fill_m3?: number | null;
   cut_m3?: number | null;
   net_m3?: number | null;
+  fill_mass_t?: number | null;
   height_cl_m?: number | null;
   height_30m_m?: number | null;
   avg_fill_height_m?: number | null;
@@ -69,9 +72,11 @@ export type CutFillSummaryBlock = {
   lhs_fill_m3?: number | null;
   lhs_cut_m3?: number | null;
   lhs_net_m3?: number | null;
+  lhs_fill_mt?: number | null;
   rhs_fill_m3?: number | null;
   rhs_cut_m3?: number | null;
   rhs_net_m3?: number | null;
+  rhs_fill_mt?: number | null;
   tcs_breakdown?: CutFillTcsBreakdown[];
 };
 
@@ -110,7 +115,6 @@ export type CutFillSeriesVisibility = Record<CutFillBranchId, boolean>;
 export const DEFAULT_CUT_FILL_VISIBILITY: CutFillSeriesVisibility = {
   lhs: true,
   rhs: true,
-  tcs: true,
 };
 
 export const CUT_FILL_CLASS_META: Record<
@@ -126,7 +130,6 @@ export const CUT_FILL_CLASS_META: Record<
 };
 
 export const CUT_FILL_CLASS_ORDER: CutFillClassId[] = [
-  "cut",
   "fill_0_2",
   "fill_2_4",
   "fill_4_6",
@@ -150,7 +153,6 @@ export const CUT_FILL_BRANCH_META: Record<
 > = {
   lhs: { label: "LHS", color: "#38bdf8", offsetM: -15 },
   rhs: { label: "RHS", color: "#f97316", offsetM: 15 },
-  tcs: { label: "TCS", color: "#a855f7", offsetM: 0 },
 };
 
 export function cutFillClassColor(classId?: string | null): string {
