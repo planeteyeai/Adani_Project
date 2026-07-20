@@ -27,7 +27,7 @@ const REPORTS: ReportItem[] = [
     meta: [
       "35 investigation locations",
       "~1 km spacing",
-      "10 m exploration depth",
+      "40 m exploration depth",
       "Client: Adani",
     ],
   },

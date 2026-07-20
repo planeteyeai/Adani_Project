@@ -229,7 +229,7 @@ export default function RoadFormationGraphPanel({
 
   const width = 1400;
   const height = 160;
-  const left = 48;
+  const left = 56;
   const right = 14;
   const top = 10;
   const bottom = 25;
@@ -461,7 +461,7 @@ export default function RoadFormationGraphPanel({
                 {hasElevation && (
                   <span className="inline-flex items-center gap-1" style={{ color: elevColor }}>
                     <span className="h-0.5 w-2.5 rounded" style={{ background: elevColor }} />
-                    {elevPoint != null ? `${elevPoint.elevation.toFixed(2)}` : "—"}
+                    {elevPoint != null ? `${elevPoint.elevation.toFixed(2)} m` : "—"}
                   </span>
                 )}
                 <span className="inline-flex items-center gap-1" style={{ color: formColor }}>
@@ -470,7 +470,7 @@ export default function RoadFormationGraphPanel({
                     style={{ borderColor: formColor, background: formColor }}
                   />
                   {formPoint?.formation_level_m != null
-                    ? `${formPoint.formation_level_m.toFixed(2)}`
+                    ? `${formPoint.formation_level_m.toFixed(2)} m`
                     : "—"}
                 </span>
               </button>
@@ -539,7 +539,7 @@ export default function RoadFormationGraphPanel({
                   fontSize={8}
                   textAnchor="middle"
                 >
-                  {tick.ch.toFixed(2)}
+                  {tick.ch.toFixed(2)} km
                 </text>
               </g>
             ))}
@@ -561,7 +561,7 @@ export default function RoadFormationGraphPanel({
                   fontSize={8}
                   textAnchor="end"
                 >
-                  {tick.toFixed(1)}
+                  {tick.toFixed(1)} m
                 </text>
               </g>
             ))}

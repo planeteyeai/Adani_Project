@@ -156,11 +156,18 @@ function Features() {
             viewport={{ once: true }}
             custom={i % 3}
             variants={fade}
-            className="group card p-6 transition hover:border-accent-500/40"
           >
-            <Icon name={f.icon} className="h-7 w-7 text-brand-400 transition group-hover:scale-110" />
-            <h3 className="mt-4 font-semibold text-white">{f.name}</h3>
-            <p className="mt-2 text-sm text-slate-400">{f.desc}</p>
+            <Link
+              to={f.to}
+              className="group flex h-full flex-col card p-6 transition hover:-translate-y-0.5 hover:border-accent-500/40"
+            >
+              <div className="flex items-center justify-between">
+                <Icon name={f.icon} className="h-7 w-7 text-brand-400 transition group-hover:scale-110" />
+                <ArrowRight className="h-4 w-4 -translate-x-1 text-slate-500 opacity-0 transition group-hover:translate-x-0 group-hover:opacity-100 group-hover:text-brand-400" />
+              </div>
+              <h3 className="mt-4 font-semibold text-white">{f.name}</h3>
+              <p className="mt-2 text-sm text-slate-400">{f.desc}</p>
+            </Link>
           </motion.div>
         ))}
       </div>

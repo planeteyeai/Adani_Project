@@ -13,6 +13,7 @@ import {
   PolarGrid,
   Radar,
   RadarChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -55,7 +56,7 @@ import { fetchBarrenLand, type BarrenLandData } from "../lib/barrenLand";
 import { fetchTrees, treesSummaryInfo, type TreesData } from "../lib/trees";
 import { fetchWaterBodies, fetchWaterways, type WaterBodiesData } from "../lib/waterBodies";
 import { fetchVillages, type VillagesData } from "../lib/villages";
-import { fetchFloodTimeseries, formatFloodDate, type FloodData } from "../lib/flood";
+import { fetchFloodTimeseries, formatFloodDate, floodGaugeReference, floodRecordMaxWaterLevel, type FloodData, type FloodMaxWaterLevel } from "../lib/flood";
 import type { ScheduleB } from "../lib/scheduleB";
 import {
   SECTIONS,
@@ -177,6 +178,7 @@ export default function Dashboard() {
   const treesInfo = treesSummaryInfo(trees);
   const floodPeaks = floodYearlyPeaks(flood);
   const floodOverall = floodOverallPeaks(flood);
+  const floodStageRecord = floodRecordMaxWaterLevel(flood);
 
   return (
     <div className="min-h-screen bg-ink-950 pt-16">
@@ -512,7 +514,7 @@ export default function Dashboard() {
 
         {view === "flood" && (
           <div className="mt-6 space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
               <Kpi
                 icon={<Waves className="h-5 w-5" />}
                 label="Observation dates"
@@ -537,10 +539,95 @@ export default function Dashboard() {
                 value={floodOverall ? `${fmt(floodOverall.peakWater)} ha` : "—"}
                 tint="text-cyan-400"
               />
+              <Kpi
+                icon={<Waves className="h-5 w-5" />}
+                label="Record max water level"
+                value={
+                  floodStageRecord
+                    ? `${floodStageRecord.max_water_level_m.toFixed(2)} m`
+                    : "—"
+                }
+                tint="text-rose-400"
+              />
             </div>
 
             {flood ? (
               <>
+                {flood.max_water_levels && flood.max_water_levels.length > 0 && (
+                  <Panel title="Yearly Maximum Water Level (m)">
+                    <div className="mb-3 text-xs text-slate-400">
+                      Measured at{" "}
+                      <span className="font-semibold text-sky-300">
+                        {floodGaugeReference(flood).name}
+                      </span>
+                      {floodGaugeReference(flood).agency ? (
+                        <span> · {floodGaugeReference(flood).agency}</span>
+                      ) : null}
+                      . Record:{" "}
+                      <span className="font-semibold text-rose-300">
+                        {floodStageRecord?.max_water_level_m.toFixed(2)} m
+                      </span>
+                      {floodStageRecord?.note
+                        ? ` · ${floodStageRecord.peak_label} (${floodStageRecord.note})`
+                        : floodStageRecord
+                          ? ` · ${floodStageRecord.peak_label}`
+                          : ""}
+                    </div>
+                    <div className="overflow-x-auto rounded-xl border border-white/10">
+                      <table className="min-w-full text-left text-sm">
+                        <thead className="bg-white/[0.03] text-[11px] uppercase tracking-wider text-slate-500">
+                          <tr>
+                            <th className="px-3 py-2 font-semibold">Year</th>
+                            <th className="px-3 py-2 font-semibold">Max water level (m)</th>
+                            <th className="px-3 py-2 font-semibold">Peak date</th>
+                            <th className="px-3 py-2 font-semibold">Note</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {flood.max_water_levels.map((row) => {
+                            const isRecord =
+                              floodStageRecord != null &&
+                              row.year === floodStageRecord.year;
+                            return (
+                              <tr
+                                key={row.year}
+                                className="border-t border-white/5 text-slate-300"
+                              >
+                                <td
+                                  className={`px-3 py-2 font-semibold tabular-nums ${
+                                    isRecord ? "text-rose-300" : "text-white"
+                                  }`}
+                                >
+                                  {row.year}
+                                </td>
+                                <td
+                                  className={`px-3 py-2 tabular-nums font-semibold ${
+                                    isRecord ? "text-rose-300" : "text-sky-300"
+                                  }`}
+                                >
+                                  {row.max_water_level_m.toFixed(2)} m
+                                </td>
+                                <td className="px-3 py-2 text-slate-400">
+                                  {row.peak_label}
+                                </td>
+                                <td className="px-3 py-2 text-rose-300/90">
+                                  {row.note ?? "—"}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="mt-4 h-[220px]">
+                      <MaxWaterLevelChart
+                        data={flood.max_water_levels}
+                        gauge={floodGaugeReference(flood)}
+                        record={floodStageRecord}
+                      />
+                    </div>
+                  </Panel>
+                )}
                 <Panel title="Water & Inundation Extent Over Time (ha)">
                   <FloodTrendChart
                     data={flood.timeseries.map((t) => ({
@@ -1301,6 +1388,75 @@ function YearlyFloodChart({ data }: { data: FloodYearRow[] }) {
         />
         <Bar dataKey="peakWater" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
         <Bar dataKey="peakFlood" fill="#f97316" radius={[4, 4, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+function MaxWaterLevelChart({
+  data,
+  gauge,
+  record,
+}: {
+  data: FloodMaxWaterLevel[];
+  gauge?: ReturnType<typeof floodGaugeReference>;
+  record?: FloodMaxWaterLevel | null;
+}) {
+  const chartData = data.map((r) => ({
+    year: String(r.year),
+    level: r.max_water_level_m,
+    label: r.peak_label,
+    note: r.note ?? "",
+  }));
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={chartData}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1a2540" />
+        <XAxis dataKey="year" stroke="#64748b" fontSize={11} />
+        <YAxis
+          stroke="#64748b"
+          fontSize={11}
+          unit=" m"
+          domain={["dataMin - 1", "dataMax + 1"]}
+        />
+        <Tooltip
+          contentStyle={tooltipStyle}
+          formatter={(val: number, _name, item) => {
+            const row = item?.payload as { label?: string; note?: string } | undefined;
+            const extras = [row?.label, row?.note].filter(Boolean).join(" · ");
+            return [
+              `${Number(val).toFixed(2)} m${extras ? ` · ${extras}` : ""}`,
+              gauge ? `Max water level · ${gauge.name}` : "Max water level",
+            ];
+          }}
+        />
+        {record && (
+          <ReferenceLine
+            y={record.max_water_level_m}
+            stroke="#fb7185"
+            strokeDasharray="4 3"
+            label={{
+              value: `Record ${record.max_water_level_m.toFixed(2)} m`,
+              fill: "#fb7185",
+              fontSize: 10,
+              position: "insideTopRight",
+            }}
+          />
+        )}
+        {gauge?.danger_level_m != null && (
+          <ReferenceLine
+            y={gauge.danger_level_m}
+            stroke="#fbbf24"
+            strokeDasharray="6 4"
+            label={{
+              value: `Danger ${gauge.danger_level_m.toFixed(2)} m`,
+              fill: "#fbbf24",
+              fontSize: 10,
+              position: "insideTopLeft",
+            }}
+          />
+        )}
+        <Bar dataKey="level" fill="#38bdf8" radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );

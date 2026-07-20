@@ -70,6 +70,23 @@ export function createTollPlazaIcon(): L.DivIcon {
   });
 }
 
+export function createFloodGaugeIcon(blink = false): L.DivIcon {
+  return L.divIcon({
+    className: `geovision-flood-gauge-icon${blink ? " active-layer-marker-blink" : ""}`,
+    html: `<div style="
+      width:30px;height:30px;border-radius:50%;
+      background:linear-gradient(135deg,#38bdf8,#0284c7);
+      border:2px solid #fff;box-shadow:0 2px 8px rgba(14,165,233,.55);
+      display:flex;align-items:center;justify-content:center;
+      font-size:9px;font-weight:800;color:#082f49;letter-spacing:-0.3px;
+    ">WL</div>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -15],
+    tooltipAnchor: [15, -12],
+  });
+}
+
 export function createAdjacentRoadIcon(): L.DivIcon {
   return L.divIcon({
     className: "geovision-adjacent-road-icon",

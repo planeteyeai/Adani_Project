@@ -247,6 +247,13 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
     group: "Analysis",
     color: "#f59e0b",
   },
+  {
+    id: "cut_fill",
+    name: "Cut & Fill",
+    description: "Earthwork volume corridor — embankment fill height & cut zones (RHS+LHS)",
+    group: "Analysis",
+    color: "#ea580c",
+  },
   { id: "corridor", name: "RoW Corridor Buffer", description: "Right-of-way influence buffer", group: "Analysis", color: "#38e1c6" },
   { id: "slope", name: "Slope Heat (sim)", description: "Simulated slope severity along route", group: "Analysis", color: "#f97316" },
 ];

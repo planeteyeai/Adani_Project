@@ -43,6 +43,7 @@ import {
   Box,
   MapPinned,
   Maximize2,
+  Minimize2,
   MapPin,
   Milestone,
   Mountain,
@@ -116,6 +117,15 @@ import {
   type RoadFormationData,
   type RoadFormationSummary,
 } from "../lib/roadFormation";
+import {
+  fetchCutFill,
+  summarizeCutFill,
+  DEFAULT_CUT_FILL_VISIBILITY,
+  type CutFillData,
+  type CutFillSummary,
+  type CutFillSeriesVisibility,
+} from "../lib/cutFill";
+import CutFillLayer, { CutFillLegend, CutFillPointCard, type CutFillMapPoint } from "../components/CutFillLayer";
 import { fetchAffectedHouses, type AffectedHousesData } from "../lib/affectedHouses";
 import { fetchWaterBodies, fetchWaterways, type WaterBodiesData } from "../lib/waterBodies";
 import { fetchVillages, type VillagesData } from "../lib/villages";
@@ -151,7 +161,7 @@ import {
   type TransmissionTowersData,
 } from "../lib/transmission";
 import { fetchTrees, treesSummaryInfo, type TreesData, type TreesSummaryInfo } from "../lib/trees";
-import { fetchFloodTimeseries, type FloodData } from "../lib/flood";
+import { fetchFloodTimeseries, floodGaugeReference, type FloodData } from "../lib/flood";
 import TreesLayer from "../components/TreesLayer";
 import ContoursLayer from "../components/ContoursLayer";
 import FloodLayer from "../components/FloodLayer";
@@ -160,6 +170,7 @@ import ChainageLayer from "../components/ChainageLayer";
 import { boreholeSummary, fetchGeotech, type Borehole, type GeotechData } from "../lib/geotech";
 import {
   createAdjacentRoadIcon,
+  createFloodGaugeIcon,
   createRoadCategoryIcon,
   createStructureIcon,
   createTollPlazaIcon,
@@ -253,9 +264,22 @@ const DEFAULT_OVERLAYS: Record<string, boolean> = {
   flood: false,
   ground_scour: false,
   road_formation: false,
+  cut_fill: false,
       corridor: false,
       slope: false,
     };
+
+/** Merge `?layers=a,b,c` from the URL onto a base overlay map (used for deep links from the landing page). */
+function overlaysFromSearch(base: Record<string, boolean>): Record<string, boolean> {
+  if (typeof window === "undefined") return base;
+  const raw = new URLSearchParams(window.location.search).get("layers");
+  if (!raw) return base;
+  const next = { ...base };
+  for (const id of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
+    if (id in next) next[id] = true;
+  }
+  return next;
+}
 
 /** Overlays allowed in 3D view — everything else is forced off. */
 const MAP_3D_OVERLAY_IDS = new Set(["alignment"]);
@@ -304,7 +328,11 @@ export default function MapExplorer() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [baseId, setBaseId] = useState("google-satellite");
   const [opacity, setOpacity] = useState(0.7);
-  const [showElevation, setShowElevation] = useState(false);
+  const [showElevation, setShowElevation] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("graph") === "elevation",
+  );
   const [elevationVisibility, setElevationVisibility] =
     useState<ElevationSeriesVisibility>(DEFAULT_ELEVATION_VISIBILITY);
   const [showRoadFormationGraph, setShowRoadFormationGraph] = useState(false);
@@ -321,6 +349,17 @@ export default function MapExplorer() {
   const [elevatedScour, setElevatedScour] = useState<ElevatedScourData | null>(null);
   const [groundScour, setGroundScour] = useState<GroundScourData | null>(null);
   const [roadFormation, setRoadFormation] = useState<RoadFormationData | null>(null);
+  const [cutFill, setCutFill] = useState<CutFillData | null>(null);
+  const [cutFillVisibility, setCutFillVisibility] = useState<CutFillSeriesVisibility>(
+    DEFAULT_CUT_FILL_VISIBILITY,
+  );
+  const [hoveredCutFill, setHoveredCutFill] = useState<CutFillMapPoint | null>(null);
+  const [cutFillCursor, setCutFillCursor] = useState<{ x: number; y: number } | null>(null);
+  const [selectedCutFill, setSelectedCutFill] = useState<CutFillMapPoint | null>(null);
+  /** Hidden alignment stroke colours (unchecked in the KMZ colour legend). */
+  const [hiddenAlignmentColors, setHiddenAlignmentColors] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [hoveredGroundScour, setHoveredGroundScour] = useState<GroundScourPoint | null>(null);
   const [groundScourCursor, setGroundScourCursor] = useState<{ x: number; y: number } | null>(null);
   const [waterBodies, setWaterBodies] = useState<WaterBodiesData | null>(null);
@@ -345,7 +384,9 @@ export default function MapExplorer() {
   const [floodDate, setFloodDate] = useState<string | null>(null);
   const [showFloodPanel, setShowFloodPanel] = useState(false);
   const [selectedBorehole, setSelectedBorehole] = useState<Borehole | null>(null);
-  const [overlays, setOverlays] = useState<Record<string, boolean>>(DEFAULT_OVERLAYS);
+  const [overlays, setOverlays] = useState<Record<string, boolean>>(() =>
+    overlaysFromSearch(DEFAULT_OVERLAYS),
+  );
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => {
     const sections: Record<string, boolean> = {};
     for (const group of ANALYSIS_OVERLAY_GROUPS) {
@@ -360,6 +401,7 @@ export default function MapExplorer() {
   const layersSectionRef = useRef<HTMLDivElement>(null);
   /** Which active-layer accordion is open on the right panel (`null` = all collapsed). */
   const [expandedActiveLayerId, setExpandedActiveLayerId] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [mapMode, setMapMode] = useState<"2d" | "3d">("2d");
   const overlaysBefore3dRef = useRef<{
     overlays: Record<string, boolean>;
@@ -406,6 +448,7 @@ export default function MapExplorer() {
       () => fetchElevatedScour().then(set(setElevatedScour)),
       () => fetchGroundScour().then(set(setGroundScour)),
       () => fetchRoadFormation().then(set(setRoadFormation)),
+      () => fetchCutFill().then(set(setCutFill)),
       () => fetchWaterBodies().then(set(setWaterBodies)),
       () => fetchWaterways().then(set(setWaterways)),
       () => fetchVillages().then(set(setVillagesData)),
@@ -445,6 +488,20 @@ export default function MapExplorer() {
   }, [overlays.ground_scour]);
 
   useEffect(() => {
+    if (!overlays.cut_fill) {
+      setHoveredCutFill(null);
+      setCutFillCursor(null);
+      setSelectedCutFill(null);
+    }
+  }, [overlays.cut_fill]);
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
+
+  useEffect(() => {
     setShowRoadFormationGraph(!!overlays.road_formation);
     if (!overlays.road_formation) {
       setRoadFormationScrub(null);
@@ -464,6 +521,16 @@ export default function MapExplorer() {
     if (!floodData || !floodDate) return null;
     return floodData.scenes[floodDate] ?? null;
   }, [floodData, floodDate]);
+
+  const floodGauge = useMemo(
+    () => (floodData ? floodGaugeReference(floodData) : null),
+    [floodData],
+  );
+
+  const floodGaugeIcon = useMemo(
+    () => createFloodGaugeIcon(expandedActiveLayerId === "flood"),
+    [expandedActiveLayerId],
+  );
 
   const boreholes = useMemo(
     () => (geotech?.boreholes ?? []).filter((b) => b.lat != null && b.lon != null),
@@ -688,6 +755,43 @@ export default function MapExplorer() {
     [chainageGeojson]
   );
 
+  /**
+   * Denser chainage → [lon,lat] resolver built from the road-formation
+   * centerline (~10 m spacing along the real geometry). The KMZ marker resolver
+   * interpolates across sparse markers and cuts chords on curves, which pushed
+   * cut/fill points off the road — this follows the actual alignment instead.
+   */
+  const resolveChainageDense = useMemo(() => {
+    const branch =
+      roadFormation?.branches.find((b) => b.id === "centerline") ??
+      roadFormation?.branches[0];
+    const anchors = (branch?.points ?? [])
+      .filter((p) => p.lat != null && p.lon != null && p.chainage_km != null)
+      .map((p) => ({ km: p.chainage_km, lon: p.lon, lat: p.lat }))
+      .sort((a, b) => a.km - b.km);
+
+    if (anchors.length < 2) return resolveChainage;
+
+    return (km: number): [number, number] | null => {
+      if (km <= anchors[0].km) return [anchors[0].lon, anchors[0].lat];
+      const last = anchors[anchors.length - 1];
+      if (km >= last.km) return [last.lon, last.lat];
+      // Binary search for the bracketing pair.
+      let lo = 0;
+      let hi = anchors.length - 1;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (anchors[mid].km <= km) lo = mid;
+        else hi = mid;
+      }
+      const a = anchors[lo];
+      const b = anchors[hi];
+      const span = b.km - a.km || 1;
+      const t = (km - a.km) / span;
+      return [a.lon + t * (b.lon - a.lon), a.lat + t * (b.lat - a.lat)];
+    };
+  }, [roadFormation, resolveChainage]);
+
   const structureMarkers = useMemo(() => {
     if (!scheduleB?.structures?.length) return [];
     const markers: Array<ScheduleBStructure & { coord: [number, number]; lon: number; lat: number }> = [];
@@ -849,6 +953,8 @@ export default function MapExplorer() {
     [roadFormation],
   );
 
+  const cutFillSummary = useMemo(() => summarizeCutFill(cutFill), [cutFill]);
+
   const lulcSummary = useMemo(() => lulcSummaryInfo(lulcData), [lulcData]);
 
   const railwayLinesInfo = useMemo(
@@ -868,6 +974,10 @@ export default function MapExplorer() {
   const blinkSvgRenderer = useMemo(() => L.svg({ padding: 0.5 }), []);
   /** Draw ground scour above the canvas overlay pane so markers stay visible; hover uses map proximity. */
   const groundScourSvgRenderer = useMemo(
+    () => L.svg({ padding: 0.5, pane: "markerPane" }),
+    [],
+  );
+  const cutFillSvgRenderer = useMemo(
     () => L.svg({ padding: 0.5, pane: "markerPane" }),
     [],
   );
@@ -1385,7 +1495,25 @@ export default function MapExplorer() {
                     />
                     {group === "Alignment & Markers" && overlays.alignment && alignmentLegend.length > 1 && (
                       <div className="mt-3">
-                        <AlignmentColorLegend items={alignmentLegend} />
+                        <AlignmentColorLegend
+                          items={alignmentLegend}
+                          hidden={hiddenAlignmentColors}
+                          onToggle={(color) =>
+                            setHiddenAlignmentColors((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(color)) next.delete(color);
+                              else next.add(color);
+                              return next;
+                            })
+                          }
+                          onToggleAll={(showAll) =>
+                            setHiddenAlignmentColors(
+                              showAll
+                                ? new Set()
+                                : new Set(alignmentLegend.map((l) => l.color)),
+                            )
+                          }
+                        />
                       </div>
                     )}
                     {group === "Alignment & Markers" && overlays.road_categories && (
@@ -1588,6 +1716,9 @@ export default function MapExplorer() {
                         <div className="mt-1">
                           {floodData.dates.length} observation dates · water &amp; inundation extent (ha)
                         </div>
+                        <div className="mt-1 text-sky-200/80">
+                          Gauge reference: {floodGaugeReference(floodData).name}
+                        </div>
                         <button
                           type="button"
                           className="mt-2 text-[10px] font-medium text-sky-300 hover:text-sky-200"
@@ -1646,6 +1777,45 @@ export default function MapExplorer() {
                             {roadFormationSummary.groundMaxM?.toFixed(1) ?? "—"} m
                           </div>
                         </div>
+                      </div>
+                    )}
+                    {group === "Analysis" && overlays.cut_fill && cutFillSummary && (
+                      <div className="mt-3 rounded-lg border border-orange-500/20 bg-orange-500/5 p-2.5 text-xs text-slate-400">
+                        <div className="font-semibold text-orange-300">Cut &amp; Fill</div>
+                        <div className="mt-1 space-y-0.5">
+                          <div>
+                            Chainage {cutFillSummary.fromKm?.toFixed(2) ?? "—"}–
+                            {cutFillSummary.toKm?.toFixed(2) ?? "—"} km
+                          </div>
+                          <div>
+                            LHS fill{" "}
+                            {cutFillSummary.lhsFillM3 != null
+                              ? `${(cutFillSummary.lhsFillM3 / 1e6).toFixed(2)} Mm³`
+                              : "—"}{" "}
+                            · RHS fill{" "}
+                            {cutFillSummary.rhsFillM3 != null
+                              ? `${(cutFillSummary.rhsFillM3 / 1e6).toFixed(2)} Mm³`
+                              : "—"}
+                          </div>
+                          <div>
+                            Total fill{" "}
+                            {cutFillSummary.fillM3 != null
+                              ? `${(cutFillSummary.fillM3 / 1e6).toFixed(2)} Mm³`
+                              : "—"}{" "}
+                            · Cut{" "}
+                            {cutFillSummary.cutM3 != null
+                              ? `${cutFillSummary.cutM3.toLocaleString()} m³`
+                              : "—"}
+                          </div>
+                          <div>
+                            TCS types: {cutFillSummary.tcsTypes.join(", ") || "—"}
+                          </div>
+                        </div>
+                        <CutFillLegend
+                          visibility={cutFillVisibility}
+                          onVisibilityChange={setCutFillVisibility}
+                          tcsTypes={cutFillSummary.tcsTypes}
+                        />
                       </div>
                     )}
                     {group === "Analysis" && overlays.slope && (
@@ -1855,6 +2025,7 @@ export default function MapExplorer() {
           {/* Alignment strokes */}
           {overlays.alignment &&
             lineFeatures.map((line, i) => {
+              if (hiddenAlignmentColors.has(line.stroke)) return null;
               const positions = line.coords.map((c) => [c[1], c[0]]) as [number, number][];
               const color = overlays.slope ? slopeColor(i) : line.stroke;
               const weight = overlays.slope ? 3 : Math.min(6, Math.max(2, line.weight));
@@ -2567,6 +2738,48 @@ export default function MapExplorer() {
           {/* Flood water / inundation heat map for selected date */}
           {overlays.flood && floodScene && <FloodLayer scene={floodScene} />}
 
+          {/* Digha Ghat gauge — reference for max water level measurements */}
+          {overlays.flood && floodGauge && (
+            <Marker
+              position={[floodGauge.lat, floodGauge.lon]}
+              icon={floodGaugeIcon}
+              zIndexOffset={800}
+            >
+              <Tooltip direction="top" offset={[0, -16]} opacity={0.95} className="geovision-tooltip">
+                <span className="font-semibold text-sky-300">{floodGauge.name}</span>
+                <br />
+                <span className="text-slate-300">Gauge reference · max water level (m)</span>
+                {floodGauge.danger_level_m != null && (
+                  <>
+                    <br />
+                    <span className="text-amber-300">
+                      Danger mark {floodGauge.danger_level_m.toFixed(2)} m
+                    </span>
+                  </>
+                )}
+              </Tooltip>
+              <Popup className="geovision-popup" minWidth={260} maxWidth={340}>
+                <div className="space-y-1.5 text-sm">
+                  <div className="font-bold text-sky-300">{floodGauge.name}</div>
+                  {floodGauge.agency && (
+                    <div className="text-xs text-slate-400">{floodGauge.agency}</div>
+                  )}
+                  {floodGauge.description && (
+                    <div className="text-xs text-slate-400">{floodGauge.description}</div>
+                  )}
+                  <div className="text-xs text-slate-500">
+                    {floodGauge.lat.toFixed(5)}°N, {floodGauge.lon.toFixed(5)}°E
+                  </div>
+                  {floodGauge.danger_level_m != null && (
+                    <div className="text-xs font-semibold text-amber-300">
+                      Danger level: {floodGauge.danger_level_m.toFixed(2)} m
+                    </div>
+                  )}
+                </div>
+              </Popup>
+            </Marker>
+          )}
+
           {/* Ground scour screening (Design HFL workbook) */}
           {overlays.ground_scour && groundScour && (
             <>
@@ -2694,6 +2907,25 @@ export default function MapExplorer() {
                 ));
               })}
             </>
+          )}
+
+          {/* Cut & fill earthwork corridor (coloured by embankment height / cut) */}
+          {overlays.cut_fill && cutFill && (
+            <CutFillLayer
+              data={cutFill}
+              resolveChainage={resolveChainageDense}
+              visibility={cutFillVisibility}
+              blink={expandedActiveLayerId === "cut_fill"}
+              svgRenderer={cutFillSvgRenderer}
+              hoveredKey={hoveredCutFill?.key ?? null}
+              selectedKey={selectedCutFill?.key ?? null}
+              interactionEnabled={!measure}
+              onHover={(point, cursor) => {
+                setHoveredCutFill(point);
+                setCutFillCursor(cursor);
+              }}
+              onSelect={(point) => setSelectedCutFill(point)}
+            />
           )}
 
           {/* Structures within acquisition boundary (building footprints) */}
@@ -2952,6 +3184,8 @@ export default function MapExplorer() {
                               <GroundScourSummaryCard info={groundScourSummary} compact />
                             ) : item.id === "road_formation" && roadFormationSummary ? (
                               <RoadFormationSummaryCard info={roadFormationSummary} compact />
+                            ) : item.id === "cut_fill" && cutFillSummary ? (
+                              <CutFillSummaryCard info={cutFillSummary} compact />
                             ) : (
                               <p className="px-0.5 text-[10px] leading-snug text-slate-400">
                                 {item.description || "Layer is active on the map."}
@@ -3112,8 +3346,22 @@ export default function MapExplorer() {
                       </div>
                 </>
               )}
-              <ToolBtn onClick={() => document.documentElement.requestFullscreen?.()} title="Fullscreen">
-                <Maximize2 className="h-4 w-4" />
+              <ToolBtn
+                active={isFullscreen}
+                onClick={() => {
+                  if (document.fullscreenElement) {
+                    void document.exitFullscreen?.();
+                  } else {
+                    void document.documentElement.requestFullscreen?.();
+                  }
+                }}
+                title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              >
+                {isFullscreen ? (
+                  <Minimize2 className="h-4 w-4" />
+                ) : (
+                  <Maximize2 className="h-4 w-4" />
+                )}
               </ToolBtn>
             </div>
                 </div>
@@ -3211,6 +3459,46 @@ export default function MapExplorer() {
               <GroundScourPointCard point={hoveredGroundScour} />
             </div>,
             document.body,
+        )}
+
+        {overlays.cut_fill &&
+          hoveredCutFill &&
+          cutFillCursor &&
+          !selectedCutFill &&
+          createPortal(
+            <div
+              className="pointer-events-none fixed z-[10000] w-[22rem] max-h-[min(88vh,34rem)] overflow-y-auto rounded-xl border border-orange-400/50 bg-ink-950 shadow-2xl ring-1 ring-orange-300/30"
+              style={{
+                left: Math.min(Math.max(cutFillCursor.x, 176), window.innerWidth - 176),
+                top: cutFillCursor.y,
+                transform:
+                  cutFillCursor.y < window.innerHeight * 0.45
+                    ? "translate(-50%, 16px)"
+                    : "translate(-50%, calc(-100% - 16px))",
+              }}
+            >
+              <CutFillPointCard point={hoveredCutFill} />
+            </div>,
+            document.body,
+          )}
+
+        {overlays.cut_fill && selectedCutFill && (
+          <div className="pointer-events-auto absolute bottom-24 left-1/2 z-[700] w-[min(22rem,calc(100vw-2rem))] -translate-x-1/2 rounded-xl border border-orange-400/50 bg-ink-950/95 shadow-2xl ring-1 ring-orange-300/30 backdrop-blur-xl">
+            <div className="flex items-center justify-between border-b border-white/10 px-3 py-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-orange-300">
+                Cut &amp; Fill detail
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedCutFill(null)}
+                className="rounded p-1 text-slate-400 hover:bg-white/10 hover:text-white"
+                title="Close"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <CutFillPointCard point={selectedCutFill} compact />
+          </div>
         )}
       </div>
       </div>
@@ -3413,6 +3701,7 @@ const OVERLAY_ICONS: Record<string, LucideIcon> = {
   flood: CloudRain,
   ground_scour: Waves,
   road_formation: Route,
+  cut_fill: LayersIcon,
   corridor: Fence,
   slope: Mountain,
 };
@@ -4315,6 +4604,82 @@ function RoadCategoriesSummaryCard({ compact = false }: { compact?: boolean }) {
   );
 }
 
+function CutFillSummaryCard({
+  info,
+  compact = false,
+}: {
+  info: CutFillSummary;
+  compact?: boolean;
+}) {
+  const accent = "#ea580c";
+  const fmtMm3 = (v: number | null) =>
+    v == null ? "—" : `${(v / 1e6).toFixed(2)} Mm³`;
+  const rows: Array<{ label: string; value: string }> = [
+    {
+      label: "Chainage",
+      value: `${info.fromKm?.toFixed(2) ?? "—"}–${info.toKm?.toFixed(2) ?? "—"} km`,
+    },
+    {
+      label: "LHS fill",
+      value: info.lhsFillM3 != null ? `${(info.lhsFillM3 / 1e6).toFixed(2)} Mm³` : "—",
+    },
+    {
+      label: "RHS fill",
+      value: info.rhsFillM3 != null ? `${(info.rhsFillM3 / 1e6).toFixed(2)} Mm³` : "—",
+    },
+    { label: "Total fill", value: fmtMm3(info.fillM3) },
+    {
+      label: "Cut volume",
+      value: info.cutM3 != null ? `${info.cutM3.toLocaleString()} m³` : "—",
+    },
+    { label: "Net borrow", value: fmtMm3(info.netM3) },
+    {
+      label: "TCS types",
+      value: info.tcsTypes.length ? info.tcsTypes.join(", ") : "—",
+    },
+  ];
+
+  return (
+    <div
+      className={
+        compact
+          ? "rounded-lg border border-orange-400/25 bg-orange-500/5 p-2"
+          : "rounded-xl border border-orange-400/35 bg-orange-500/10 p-2.5"
+      }
+    >
+      <div
+        className={compact ? "mb-2 h-1.5 w-full rounded-full" : "mb-2 h-3 w-full rounded-sm"}
+        style={{ backgroundColor: accent }}
+      />
+      <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-orange-300">
+        Cut &amp; Fill earthwork
+      </div>
+      <div className="space-y-1 text-[10px]">
+        {rows.map((row) => (
+          <div key={row.label} className="flex justify-between gap-2 text-slate-400">
+            <span>{row.label}</span>
+            <span className="tabular-nums font-semibold text-slate-100">{row.value}</span>
+          </div>
+        ))}
+      </div>
+      {info.classCounts.length > 0 && (
+        <div className="mt-2 space-y-0.5 border-t border-white/10 pt-2">
+          {info.classCounts.map((c) => (
+            <div key={c.classId} className="flex items-center gap-1.5 text-[10px] text-slate-400">
+              <span
+                className="h-2 w-3 shrink-0 rounded-sm"
+                style={{ backgroundColor: c.color }}
+              />
+              <span className="min-w-0 flex-1 truncate">{c.label}</span>
+              <span className="tabular-nums text-slate-300">{c.count}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RoadFormationSummaryCard({
   info,
   compact = false,
@@ -5049,18 +5414,55 @@ function formatChainage(km: number): string {
   return `${whole}+${String(metres).padStart(3, "0")}`;
 }
 
-function AlignmentColorLegend({ items }: { items: Array<{ color: string; label: string }> }) {
+function AlignmentColorLegend({
+  items,
+  hidden,
+  onToggle,
+  onToggleAll,
+}: {
+  items: Array<{ color: string; label: string }>;
+  hidden: Set<string>;
+  onToggle: (color: string) => void;
+  onToggleAll: (showAll: boolean) => void;
+}) {
   const shown = items.slice(0, 12);
+  const allVisible = items.every((it) => !hidden.has(it.color));
   return (
     <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-3">
-      <div className="mb-2 text-xs font-semibold text-white">Alignment colours (from KMZ)</div>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-xs font-semibold text-white">Alignment colours (from KMZ)</div>
+        <button
+          type="button"
+          onClick={() => onToggleAll(!allVisible)}
+          className="text-[10px] font-medium text-brand-300 hover:text-brand-200"
+        >
+          {allVisible ? "Hide all" : "Show all"}
+        </button>
+      </div>
       <div className="max-h-40 space-y-1 overflow-y-auto">
-        {shown.map(({ color, label }) => (
-          <div key={color + label} className="flex items-center gap-2 text-xs text-slate-300">
-            <span className="h-2.5 w-6 shrink-0 rounded" style={{ background: color }} />
-            <span className="truncate">{label}</span>
-          </div>
-        ))}
+        {shown.map(({ color, label }) => {
+          const checked = !hidden.has(color);
+          return (
+            <label
+              key={color + label}
+              className="flex cursor-pointer items-center gap-2 text-xs text-slate-300 hover:text-white"
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => onToggle(color)}
+                className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-brand-500"
+              />
+              <span
+                className="h-2.5 w-6 shrink-0 rounded"
+                style={{ background: color, opacity: checked ? 1 : 0.3 }}
+              />
+              <span className={`truncate ${checked ? "" : "text-slate-500 line-through"}`}>
+                {label}
+              </span>
+            </label>
+          );
+        })}
         {items.length > shown.length && (
           <div className="text-[10px] text-slate-500">+{items.length - shown.length} more</div>
         )}

@@ -253,7 +253,7 @@ export default function ElevationGraphModal({
 
   const width = Math.max(1200, Math.min(Math.max(centerlinePts.length, 200) * 3, 14000));
   const height = 120;
-  const paddingLeft = 44;
+  const paddingLeft = 52;
   const paddingRight = 12;
   const paddingTop = 10;
   const paddingBottom = 22;
@@ -486,13 +486,13 @@ export default function ElevationGraphModal({
             )}
             <span className="text-slate-500">·</span>
             <span>
-              Min <span className="text-brand-400">{minY.toFixed(0)}</span>
+              Min <span className="text-brand-400">{minY.toFixed(0)} m</span>
             </span>
             <span>
-              Max <span className="text-brand-400">{maxY.toFixed(0)}</span>
+              Max <span className="text-brand-400">{maxY.toFixed(0)} m</span>
             </span>
             <span>
-              Avg <span className="text-brand-400">{avgY.toFixed(0)}</span> m
+              Avg <span className="text-brand-400">{avgY.toFixed(0)} m</span>
             </span>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
@@ -695,16 +695,16 @@ export default function ElevationGraphModal({
                     fontSize="7"
                     textAnchor="middle"
                   >
-                    {p.chainage.toFixed(2)}
+                    {p.chainage.toFixed(2)} km
                   </text>
                 </g>
               );
             })}
 
             {[
-              { y: minY, label: minY.toFixed(1) },
-              { y: (minY + maxY) / 2, label: ((minY + maxY) / 2).toFixed(1) },
-              { y: maxY, label: maxY.toFixed(1) },
+              { y: minY, label: `${minY.toFixed(1)} m` },
+              { y: (minY + maxY) / 2, label: `${((minY + maxY) / 2).toFixed(1)} m` },
+              { y: maxY, label: `${maxY.toFixed(1)} m` },
             ].map((tick, idx) => (
               <g key={`ytick-${idx}`}>
                 <line
