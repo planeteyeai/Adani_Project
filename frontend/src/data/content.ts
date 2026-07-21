@@ -8,7 +8,7 @@ export const FEATURES = [
   { icon: "Layers3", name: "Soil & Geology", desc: "Soil type, bearing capacity, foundation recommendation, faults and seismic zone.", to: "/explorer?layers=boreholes" },
   { icon: "Split", name: "Alignment Optimisation", desc: "AI suggests shortest, lowest-earthwork, lowest-cost and lowest-risk routes.", to: "/explorer?layers=alignment,sb_ramps" },
   { icon: "Truck", name: "Haul & Borrow Planning", desc: "Vehicle routing, borrow-area and disposal-site recommendation with cost.", to: "/explorer?layers=barren_land,road_network" },
-  { icon: "Gauge", name: "GIS Dashboard", desc: "Dark, modern widgets: length, elevation, slope, earthwork, structures, risk score.", to: "/dashboard" },
+  { icon: "Gauge", name: "GIS Dashboard", desc: "Dark, modern widgets: length, elevation, slope, earthwork, structures.", to: "/dashboard" },
 ] as const;
 
 export const STATS = [

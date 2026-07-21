@@ -9,10 +9,6 @@ import {
   Legend,
   Pie,
   PieChart,
-  PolarAngleAxis,
-  PolarGrid,
-  Radar,
-  RadarChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -23,9 +19,7 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Building2,
-  ChevronDown,
   Droplets,
-  IndianRupee,
   Layers,
   Mountain,
   Route,
@@ -57,10 +51,14 @@ import { fetchTrees, treesSummaryInfo, type TreesData } from "../lib/trees";
 import { fetchWaterBodies, fetchWaterways, type WaterBodiesData } from "../lib/waterBodies";
 import { fetchVillages, type VillagesData } from "../lib/villages";
 import { fetchFloodTimeseries, formatFloodDate, floodGaugeReference, floodRecordMaxWaterLevel, type FloodData, type FloodMaxWaterLevel } from "../lib/flood";
+import {
+  fetchCutFill,
+  summarizeCutFill,
+  type CutFillData,
+  type CutFillSummary,
+} from "../lib/cutFill";
 import type { ScheduleB } from "../lib/scheduleB";
 import {
-  SECTIONS,
-  SECTION_GROUPS,
   chainageInWindow,
   getSectionById,
   sectionChainageWindow,
@@ -85,14 +83,14 @@ type DataView =
 const DATA_VIEWS: { id: DataView; label: string; hint: string }[] = [
   { id: "overview", label: "Overview", hint: "Key KPIs for the selected scope" },
   { id: "elevation", label: "Elevation Profile", hint: "Ground elevation along chainage" },
-  { id: "earthwork", label: "Earth Balance", hint: "Cut, fill, borrow & waste" },
+  { id: "earthwork", label: "Earth Balance", hint: "Corridor fill volumes (LHS / RHS)" },
   { id: "environment", label: "Environment", hint: "LULC, barren land, trees, water & villages" },
-  { id: "flood", label: "Flood Risk", hint: "Satellite water & inundation over time" },
+  { id: "flood", label: "Flood Risk", hint: "Satellite water & gauge levels at Digha Ghat" },
   { id: "scour", label: "Scour & HFL", hint: "Predictive bridge scour & design HFL" },
   { id: "road_formation", label: "Road Formation", hint: "Formation level vs ground elevation" },
-  { id: "slope_risk", label: "Slope & Risk", hint: "Slope bands and risk radar" },
+  { id: "slope_risk", label: "Slope", hint: "Slope band distribution" },
   { id: "structures", label: "Structures & Schedule-B", hint: "Inventory and engineering register" },
-  { id: "geotech", label: "Geotechnical", hint: "Boreholes and soil tests" },
+  { id: "geotech", label: "Geotechnical", hint: "36 borehole soil-test logs" },
 ];
 
 export default function Dashboard() {
@@ -108,7 +106,8 @@ export default function Dashboard() {
   const [waterways, setWaterways] = useState<WaterBodiesData | null>(null);
   const [villages, setVillages] = useState<VillagesData | null>(null);
   const [flood, setFlood] = useState<FloodData | null>(null);
-  const [sectionId, setSectionId] = useState<number | null>(null);
+  const [cutFill, setCutFill] = useState<CutFillData | null>(null);
+  const [sectionId] = useState<number | null>(null);
   const [view, setView] = useState<DataView>("overview");
 
   useEffect(() => {
@@ -122,6 +121,7 @@ export default function Dashboard() {
     fetchWaterways().then(setWaterways);
     fetchVillages().then(setVillages);
     fetchFloodTimeseries().then(setFlood);
+    fetchCutFill().then(setCutFill);
     fetchProject("demo").then((p) => {
       setProject(p);
       Promise.all([fetchMetrics(p), fetchElevationProfile()]).then(([m, elev]) => {
@@ -149,6 +149,12 @@ export default function Dashboard() {
     return scopeMetrics(metrics, section, geotech, lulc);
   }, [metrics, section, geotech, lulc]);
 
+  const cutFillInfo = useMemo(() => summarizeCutFill(cutFill), [cutFill]);
+  const earthwork = useMemo(
+    () => scopeCutFill(cutFillInfo, section, metrics?.length_km ?? null),
+    [cutFillInfo, section, metrics?.length_km],
+  );
+
   if (!project || !metrics || !scoped) {
     return (
       <div className="grid min-h-screen place-items-center pt-16 text-slate-400">
@@ -158,19 +164,23 @@ export default function Dashboard() {
   }
 
   const { viewMetrics: m, scopeLabel, geotechScoped, lulcClasses, scheduleB } = scoped;
-  const ew = m.earthwork;
   const earthworkData = [
-    { name: "Cut", value: ew.cut_m3 },
-    { name: "Fill", value: ew.fill_m3 },
-    { name: "Borrow", value: ew.borrow_m3 },
-    { name: "Waste", value: ew.waste_m3 },
+    { name: "LHS Fill", value: earthwork.lhsFillM3 },
+    { name: "RHS Fill", value: earthwork.rhsFillM3 },
+    { name: "Total Fill", value: earthwork.fillM3 },
+    { name: "Cut", value: earthwork.cutM3 },
   ];
+  const fillClassData =
+    cutFillInfo?.classCounts.map((c) => ({
+      name: c.label,
+      value: c.count,
+      color: c.color,
+    })) ?? [];
   const landUseData =
     lulcClasses.length > 0
       ? lulcClasses.map((c) => ({ name: c.name, value: c.count, color: c.color }))
       : Object.entries(m.land_use).map(([name, value]) => ({ name, value }));
   const slopeData = Object.entries(m.slope_bands).map(([name, value]) => ({ name, value }));
-  const riskData = Object.entries(m.risks).map(([subject, A]) => ({ subject, A }));
 
   // Corridor-wide summaries for the newer datasets (not section-scoped).
   const scour = summarizeGroundScour(groundScour);
@@ -179,6 +189,7 @@ export default function Dashboard() {
   const floodPeaks = floodYearlyPeaks(flood);
   const floodOverall = floodOverallPeaks(flood);
   const floodStageRecord = floodRecordMaxWaterLevel(flood);
+  const floodGauge = floodGaugeReference(flood);
 
   return (
     <div className="min-h-screen bg-ink-950 pt-16">
@@ -198,16 +209,6 @@ export default function Dashboard() {
 
         {/* Scope controls */}
         <div className="mt-6 space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Corridor section
-              </div>
-              <div className="mt-0.5 text-sm text-slate-300">{scopeLabel}</div>
-            </div>
-            <SectionSelect value={sectionId} onChange={setSectionId} />
-          </div>
-
           <div>
             <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
               Data to view
@@ -234,7 +235,7 @@ export default function Dashboard() {
 
         {/* Overview KPIs — always visible on overview; compact strip otherwise */}
         {(view === "overview" || view === "earthwork" || view === "elevation") && (
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <Kpi
               icon={<Route className="h-5 w-5" />}
               label={section ? "Section length" : "Centreline"}
@@ -253,8 +254,12 @@ export default function Dashboard() {
             />
             <Kpi
               icon={<Layers className="h-5 w-5" />}
-              label="Total Earthwork"
-              value={`${fmt(ew.cut_m3 + ew.fill_m3)} m³`}
+              label="Total Fill"
+              value={
+                earthwork.fillM3 > 0
+                  ? `${(earthwork.fillM3 / 1e6).toFixed(2)} Mm³`
+                  : "—"
+              }
               tint="text-accent-400"
             />
             <Kpi
@@ -264,16 +269,10 @@ export default function Dashboard() {
               tint="text-violet-400"
             />
             <Kpi
-              icon={<AlertTriangle className="h-5 w-5" />}
-              label="Risk Score"
-              value={`${m.risk_score}/100`}
-              tint="text-rose-400"
-            />
-            <Kpi
-              icon={<IndianRupee className="h-5 w-5" />}
-              label="Est. Cost"
-              value={`₹${m.estimated_cost_cr} Cr`}
-              tint="text-emerald-400"
+              icon={<Ruler className="h-5 w-5" />}
+              label="Soil boreholes"
+              value={geotech ? String(geotech.count) : "—"}
+              tint="text-fuchsia-400"
             />
           </div>
         )}
@@ -287,6 +286,16 @@ export default function Dashboard() {
                 label="Peak flood extent"
                 value={floodOverall ? `${fmt(floodOverall.peakFlood)} ha` : "—"}
                 tint="text-sky-400"
+              />
+              <Kpi
+                icon={<Droplets className="h-5 w-5" />}
+                label={`${floodGauge.name} danger`}
+                value={
+                  floodGauge.danger_level_m != null
+                    ? `${floodGauge.danger_level_m.toFixed(2)} m`
+                    : "—"
+                }
+                tint="text-amber-300"
               />
               <Kpi
                 icon={<AlertTriangle className="h-5 w-5" />}
@@ -307,16 +316,6 @@ export default function Dashboard() {
                 tint="text-emerald-400"
               />
               <Kpi
-                icon={<Sprout className="h-5 w-5" />}
-                label="Barren land"
-                value={
-                  barrenLand?.total_area_ha != null
-                    ? `${fmt(barrenLand.total_area_ha)} ha`
-                    : "—"
-                }
-                tint="text-amber-400"
-              />
-              <Kpi
                 icon={<Building2 className="h-5 w-5" />}
                 label="Villages"
                 value={villages ? String(villages.count) : "—"}
@@ -328,7 +327,7 @@ export default function Dashboard() {
               <Panel title="Elevation Profile" className="lg:col-span-2">
                 <ElevationChart data={m.elevation_profile} />
               </Panel>
-              <Panel title="Earthwork Balance">
+              <Panel title="Cut & Fill Balance">
                 <EarthworkChart data={earthworkData} />
               </Panel>
               <Panel title="Land Use / LULC">
@@ -336,9 +335,6 @@ export default function Dashboard() {
               </Panel>
               <Panel title="Slope Distribution">
                 <SlopeChart data={slopeData} />
-              </Panel>
-              <Panel title="Risk Assessment">
-                <RiskChart data={riskData} />
               </Panel>
             </div>
           </>
@@ -375,40 +371,131 @@ export default function Dashboard() {
         )}
 
         {view === "earthwork" && (
-          <div className="mt-6 grid gap-4 lg:grid-cols-2">
-            <Panel title="Earthwork Balance">
-              <EarthworkChart data={earthworkData} height={300} />
-            </Panel>
-            <Panel title="Earthwork quantities">
-              <div className="space-y-3">
-                {[
-                  ["Cut", ew.cut_m3, "#12c9b0"],
-                  ["Fill", ew.fill_m3, "#3b82f6"],
-                  ["Borrow", ew.borrow_m3, "#f59e0b"],
-                  ["Waste", ew.waste_m3, "#8b5cf6"],
-                  ["Net balance (cut − fill)", ew.balance_m3, "#ef4444"],
-                ].map(([label, value, color]) => (
-                  <div
-                    key={String(label)}
-                    className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-4 py-3"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <span className="h-2.5 w-2.5 rounded-sm" style={{ background: String(color) }} />
-                      <span className="text-sm text-slate-300">{label}</span>
+          <div className="mt-6 space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+              <Kpi
+                icon={<Layers className="h-5 w-5" />}
+                label="Total fill"
+                value={
+                  earthwork.fillM3 > 0
+                    ? `${(earthwork.fillM3 / 1e6).toFixed(2)} Mm³`
+                    : "—"
+                }
+                tint="text-orange-400"
+              />
+              <Kpi
+                icon={<Route className="h-5 w-5" />}
+                label="LHS fill"
+                value={
+                  earthwork.lhsFillM3 > 0
+                    ? `${(earthwork.lhsFillM3 / 1e6).toFixed(2)} Mm³`
+                    : "—"
+                }
+                tint="text-sky-400"
+              />
+              <Kpi
+                icon={<Route className="h-5 w-5" />}
+                label="RHS fill"
+                value={
+                  earthwork.rhsFillM3 > 0
+                    ? `${(earthwork.rhsFillM3 / 1e6).toFixed(2)} Mm³`
+                    : "—"
+                }
+                tint="text-amber-400"
+              />
+              <Kpi
+                icon={<Mountain className="h-5 w-5" />}
+                label="Cut volume"
+                value={`${fmt(earthwork.cutM3)} m³`}
+                tint="text-brand-400"
+              />
+              <Kpi
+                icon={<Ruler className="h-5 w-5" />}
+                label="Chainage"
+                value={
+                  cutFillInfo?.fromKm != null && cutFillInfo?.toKm != null
+                    ? `${cutFillInfo.fromKm.toFixed(1)}–${cutFillInfo.toKm.toFixed(1)} km`
+                    : "—"
+                }
+                tint="text-slate-300"
+              />
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Panel title="Cut & Fill volumes">
+                <EarthworkChart data={earthworkData} height={300} />
+              </Panel>
+              <Panel title="Earthwork quantities">
+                <div className="space-y-3">
+                  {[
+                    ["LHS fill", earthwork.lhsFillM3, "#38bdf8"],
+                    ["RHS fill", earthwork.rhsFillM3, "#f97316"],
+                    ["Total fill", earthwork.fillM3, "#ea580c"],
+                    ["Cut", earthwork.cutM3, "#12c9b0"],
+                    ["Net (fill − cut)", earthwork.netM3, "#ef4444"],
+                  ].map(([label, value, color]) => (
+                    <div
+                      key={String(label)}
+                      className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-4 py-3"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span
+                          className="h-2.5 w-2.5 rounded-sm"
+                          style={{ background: String(color) }}
+                        />
+                        <span className="text-sm text-slate-300">{label}</span>
+                      </div>
+                      <span className="font-semibold tabular-nums text-white">
+                        {Number(value) >= 1e6
+                          ? `${(Number(value) / 1e6).toFixed(2)} Mm³`
+                          : `${fmt(Number(value))} m³`}
+                      </span>
                     </div>
-                    <span className="font-semibold tabular-nums text-white">
-                      {fmt(Number(value))} m³
-                    </span>
+                  ))}
+                  {section && (
+                    <p className="pt-1 text-[11px] text-slate-500">
+                      Quantities scaled to section length ({section.ramp_length_km.toFixed(2)} km)
+                      from corridor cut &amp; fill survey.
+                    </p>
+                  )}
+                  {!section && cutFillInfo && (
+                    <p className="pt-1 text-[11px] text-slate-500">
+                      Source: excavation datasheet · {cutFillInfo.segmentCount} × 100 m segments ·
+                      60 m RoW (LHS + RHS).
+                    </p>
+                  )}
+                </div>
+              </Panel>
+            </div>
+
+            {fillClassData.length > 0 && (
+              <div className="grid gap-4 lg:grid-cols-2">
+                <Panel title="Fill height class distribution">
+                  <LandUseChart data={fillClassData} height={280} />
+                </Panel>
+                <Panel title="Class breakdown (100 m segments)">
+                  <div className="space-y-2">
+                    {fillClassData.map((row) => (
+                      <div
+                        key={row.name}
+                        className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-sm"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="h-2.5 w-2.5 rounded-full"
+                            style={{ background: row.color }}
+                          />
+                          <span className="text-slate-300">{row.name}</span>
+                        </div>
+                        <span className="tabular-nums text-white">
+                          {row.value} segments
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-                {section && (
-                  <p className="pt-1 text-[11px] text-slate-500">
-                    Quantities scaled to section length ({section.ramp_length_km.toFixed(2)} km) from
-                    corridor earthwork balance.
-                  </p>
-                )}
+                </Panel>
               </div>
-            </Panel>
+            )}
           </div>
         )}
 
@@ -465,28 +552,36 @@ export default function Dashboard() {
               </Panel>
               <Panel title="Class breakdown">
                 <div className="space-y-2">
-                  {landUseData.map((row, i) => (
-                    <div
-                      key={row.name}
-                      className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-sm"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="h-2.5 w-2.5 rounded-sm"
-                          style={{
-                            background:
-                              "color" in row && row.color
-                                ? String(row.color)
-                                : COLORS[i % COLORS.length],
-                          }}
-                        />
-                        <span className="text-slate-300">{row.name}</span>
-                      </div>
-                      <span className="tabular-nums text-white">
-                        {lulcClasses.length > 0 ? `${row.value} polygons` : `${row.value}%`}
-                      </span>
-                    </div>
-                  ))}
+                  {(() => {
+                    const total = landUseData.reduce(
+                      (sum, row) => sum + (Number(row.value) || 0),
+                      0,
+                    );
+                    return landUseData.map((row, i) => {
+                      const pct =
+                        total > 0 ? ((Number(row.value) || 0) / total) * 100 : Number(row.value) || 0;
+                      return (
+                        <div
+                          key={row.name}
+                          className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-sm"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="h-2.5 w-2.5 rounded-sm"
+                              style={{
+                                background:
+                                  "color" in row && row.color
+                                    ? String(row.color)
+                                    : COLORS[i % COLORS.length],
+                              }}
+                            />
+                            <span className="text-slate-300">{row.name}</span>
+                          </div>
+                          <span className="tabular-nums text-white">{pct.toFixed(1)}%</span>
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
               </Panel>
             </div>
@@ -514,7 +609,7 @@ export default function Dashboard() {
 
         {view === "flood" && (
           <div className="mt-6 space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
               <Kpi
                 icon={<Waves className="h-5 w-5" />}
                 label="Observation dates"
@@ -548,6 +643,16 @@ export default function Dashboard() {
                     : "—"
                 }
                 tint="text-rose-400"
+              />
+              <Kpi
+                icon={<AlertTriangle className="h-5 w-5" />}
+                label={`${floodGauge.name} danger`}
+                value={
+                  floodGauge.danger_level_m != null
+                    ? `${floodGauge.danger_level_m.toFixed(2)} m`
+                    : "—"
+                }
+                tint="text-amber-300"
               />
             </div>
 
@@ -801,12 +906,9 @@ export default function Dashboard() {
         )}
 
         {view === "slope_risk" && (
-          <div className="mt-6 grid gap-4 lg:grid-cols-2">
+          <div className="mt-6">
             <Panel title="Slope Distribution">
               <SlopeChart data={slopeData} height={300} />
-            </Panel>
-            <Panel title="Risk Assessment">
-              <RiskChart data={riskData} height={300} />
             </Panel>
           </div>
         )}
@@ -898,6 +1000,35 @@ export default function Dashboard() {
       </div>
     </div>
   );
+}
+
+function scopeCutFill(
+  info: CutFillSummary | null,
+  section: CorridorSection | null,
+  corridorLengthKm: number | null,
+): {
+  fillM3: number;
+  cutM3: number;
+  netM3: number;
+  lhsFillM3: number;
+  rhsFillM3: number;
+} {
+  const fill = info?.fillM3 ?? 0;
+  const cut = info?.cutM3 ?? 0;
+  const net = info?.netM3 ?? fill - cut;
+  const lhs = info?.lhsFillM3 ?? 0;
+  const rhs = info?.rhsFillM3 ?? 0;
+  if (!section || !corridorLengthKm || corridorLengthKm <= 0) {
+    return { fillM3: fill, cutM3: cut, netM3: net, lhsFillM3: lhs, rhsFillM3: rhs };
+  }
+  const scale = section.ramp_length_km / corridorLengthKm;
+  return {
+    fillM3: Math.round(fill * scale),
+    cutM3: Math.round(cut * scale),
+    netM3: Math.round(net * scale),
+    lhsFillM3: Math.round(lhs * scale),
+    rhsFillM3: Math.round(rhs * scale),
+  };
 }
 
 function scopeMetrics(
@@ -1053,92 +1184,6 @@ function filterGeotech(
   };
 }
 
-function SectionSelect({
-  value,
-  onChange,
-}: {
-  value: number | null;
-  onChange: (id: number | null) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const selected = getSectionById(value);
-
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex min-w-[16rem] max-w-[22rem] items-center justify-between gap-2 rounded-xl border border-white/10 bg-ink-900 px-3 py-2 text-left text-xs text-slate-200 transition hover:border-white/25"
-      >
-        <span className="truncate">
-          {selected ? (
-            <>
-              <span className="mr-1.5 font-bold text-brand-300">{selected.id}</span>
-              {selected.name}
-            </>
-          ) : (
-            "All corridor sections"
-          )}
-        </span>
-        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-slate-400 ${open ? "rotate-180" : ""}`} />
-      </button>
-      {open && (
-        <>
-          <button
-            type="button"
-            className="fixed inset-0 z-40 cursor-default"
-            aria-label="Close"
-            onClick={() => setOpen(false)}
-          />
-          <div className="absolute right-0 z-50 mt-1.5 max-h-[22rem] w-80 overflow-y-auto rounded-xl border border-white/10 bg-ink-950 p-1.5 shadow-2xl">
-            <button
-              type="button"
-              onClick={() => {
-                onChange(null);
-                setOpen(false);
-              }}
-              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition hover:bg-white/10 ${
-                value == null ? "bg-brand-500/15 text-brand-200" : "text-slate-300"
-              }`}
-            >
-              All corridor sections
-            </button>
-            <div className="my-1 border-t border-white/10" />
-            {SECTION_GROUPS.map((group) => (
-              <div key={group}>
-                <div className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-brand-300/80">
-                  {group}
-                </div>
-                {SECTIONS.filter((s) => s.group === group).map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => {
-                      onChange(s.id);
-                      setOpen(false);
-                    }}
-                    className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition hover:bg-white/10 ${
-                      value === s.id ? "bg-brand-500/15 text-brand-200" : "text-slate-300"
-                    }`}
-                  >
-                    <span className="mt-0.5 grid h-5 w-6 shrink-0 place-items-center rounded bg-white/10 text-[10px] font-bold">
-                      {s.id}
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium text-white">{s.from}</span>
-                      <span className="block truncate text-[10px] text-slate-400">→ {s.to}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 const tooltipStyle = {
   background: "#0a1120",
   border: "1px solid rgba(255,255,255,0.1)",
@@ -1146,6 +1191,9 @@ const tooltipStyle = {
   color: "#e6edf7",
   fontSize: 12,
 };
+
+const tooltipItemStyle = { color: "#e6edf7" };
+const tooltipLabelStyle = { color: "#94a3b8" };
 
 function ElevationChart({
   data,
@@ -1166,7 +1214,7 @@ function ElevationChart({
         <CartesianGrid strokeDasharray="3 3" stroke="#1a2540" />
         <XAxis dataKey="chainage_km" stroke="#64748b" fontSize={11} tickFormatter={(v) => `${v}`} />
         <YAxis stroke="#64748b" fontSize={11} unit="m" />
-        <Tooltip contentStyle={tooltipStyle} labelFormatter={(v) => `Chainage ${v} km`} />
+        <Tooltip contentStyle={tooltipStyle} itemStyle={tooltipItemStyle} labelStyle={tooltipLabelStyle} labelFormatter={(v) => `Chainage ${v} km`} />
         <Area
           type="monotone"
           dataKey="ground_level_m"
@@ -1193,7 +1241,7 @@ function EarthworkChart({
         <CartesianGrid strokeDasharray="3 3" stroke="#1a2540" />
         <XAxis dataKey="name" stroke="#64748b" fontSize={11} />
         <YAxis stroke="#64748b" fontSize={11} tickFormatter={fmt} />
-        <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${fmt(v)} m³`, ""]} />
+        <Tooltip contentStyle={tooltipStyle} itemStyle={tooltipItemStyle} labelStyle={tooltipLabelStyle} formatter={(v: number) => [`${fmt(v)} m³`, ""]} />
         <Bar dataKey="value" radius={[6, 6, 0, 0]}>
           {data.map((_, i) => (
             <Cell key={i} fill={COLORS[i % COLORS.length]} />
@@ -1207,10 +1255,15 @@ function EarthworkChart({
 function LandUseChart({
   data,
   height = 260,
+  valueSuffix = "%",
 }: {
   data: Array<{ name: string; value: number; color?: string }>;
   height?: number;
+  /** Unit shown in tooltip. Defaults to percent of total. */
+  valueSuffix?: "%" | "polygons" | "segments" | "count";
 }) {
+  const total = data.reduce((sum, row) => sum + (Number(row.value) || 0), 0);
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <PieChart>
@@ -1228,7 +1281,25 @@ function LandUseChart({
             <Cell key={i} fill={row.color ?? COLORS[i % COLORS.length]} />
           ))}
         </Pie>
-        <Tooltip contentStyle={tooltipStyle} />
+        <Tooltip
+          contentStyle={tooltipStyle}
+          itemStyle={tooltipItemStyle}
+          labelStyle={tooltipLabelStyle}
+          formatter={(value: number, name: string) => {
+            const n = Number(value) || 0;
+            if (valueSuffix === "%") {
+              const pct = total > 0 ? (n / total) * 100 : 0;
+              return [`${pct.toFixed(1)}%`, String(name)];
+            }
+            if (valueSuffix === "polygons") {
+              return [`${n.toLocaleString()} polygons`, String(name)];
+            }
+            if (valueSuffix === "segments") {
+              return [`${n.toLocaleString()} segments`, String(name)];
+            }
+            return [n.toLocaleString(), String(name)];
+          }}
+        />
         <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
       </PieChart>
     </ResponsiveContainer>
@@ -1248,32 +1319,13 @@ function SlopeChart({
         <CartesianGrid strokeDasharray="3 3" stroke="#1a2540" />
         <XAxis type="number" stroke="#64748b" fontSize={11} unit="%" />
         <YAxis dataKey="name" type="category" stroke="#64748b" fontSize={10} width={110} />
-        <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v}%`, ""]} />
+        <Tooltip contentStyle={tooltipStyle} itemStyle={tooltipItemStyle} labelStyle={tooltipLabelStyle} formatter={(v: number) => [`${v}%`, ""]} />
         <Bar dataKey="value" radius={[0, 6, 6, 0]}>
           {data.map((_, i) => (
             <Cell key={i} fill={["#22c55e", "#eab308", "#f97316", "#ef4444"][i % 4]} />
           ))}
         </Bar>
       </BarChart>
-    </ResponsiveContainer>
-  );
-}
-
-function RiskChart({
-  data,
-  height = 260,
-}: {
-  data: Array<{ subject: string; A: number }>;
-  height?: number;
-}) {
-  return (
-    <ResponsiveContainer width="100%" height={height}>
-      <RadarChart data={data} outerRadius={Math.min(90, height / 2 - 20)}>
-        <PolarGrid stroke="#1a2540" />
-        <PolarAngleAxis dataKey="subject" tick={{ fill: "#94a3b8", fontSize: 10 }} />
-        <Radar dataKey="A" stroke="#f43f5e" fill="#f43f5e" fillOpacity={0.4} />
-        <Tooltip contentStyle={tooltipStyle} />
-      </RadarChart>
     </ResponsiveContainer>
   );
 }
@@ -1339,6 +1391,8 @@ function FloodTrendChart({
         <YAxis stroke="#64748b" fontSize={11} tickFormatter={fmt} unit="" />
         <Tooltip
           contentStyle={tooltipStyle}
+          itemStyle={tooltipItemStyle}
+          labelStyle={tooltipLabelStyle}
           labelFormatter={(v) => formatFloodDate(String(v))}
           formatter={(val: number, name) => [
             `${fmt(val)} ha`,
@@ -1377,6 +1431,8 @@ function YearlyFloodChart({ data }: { data: FloodYearRow[] }) {
         <YAxis stroke="#64748b" fontSize={11} tickFormatter={fmt} />
         <Tooltip
           contentStyle={tooltipStyle}
+          itemStyle={tooltipItemStyle}
+          labelStyle={tooltipLabelStyle}
           formatter={(val: number, name) => [
             `${fmt(val)} ha`,
             name === "peakWater" ? "Peak water" : "Peak inundation",
@@ -1421,6 +1477,8 @@ function MaxWaterLevelChart({
         />
         <Tooltip
           contentStyle={tooltipStyle}
+          itemStyle={tooltipItemStyle}
+          labelStyle={tooltipLabelStyle}
           formatter={(val: number, _name, item) => {
             const row = item?.payload as { label?: string; note?: string } | undefined;
             const extras = [row?.label, row?.note].filter(Boolean).join(" · ");
@@ -1486,6 +1544,8 @@ function ScourChainageChart({
         <YAxis stroke="#64748b" fontSize={11} unit="m" />
         <Tooltip
           contentStyle={tooltipStyle}
+          itemStyle={tooltipItemStyle}
+          labelStyle={tooltipLabelStyle}
           labelFormatter={(v) => `Chainage ${Number(v).toFixed(3)} km`}
           formatter={(val: number, name) => [
             `${Number(val).toFixed(2)} m`,
@@ -1538,6 +1598,8 @@ function RoadFormationChart({ data }: { data: RoadFormationData }) {
         <YAxis stroke="#64748b" fontSize={11} unit="m" domain={["dataMin - 2", "dataMax + 2"]} />
         <Tooltip
           contentStyle={tooltipStyle}
+          itemStyle={tooltipItemStyle}
+          labelStyle={tooltipLabelStyle}
           labelFormatter={(v) => `Chainage ${Number(v).toFixed(3)} km`}
           formatter={(val: number, name) => [`${Number(val).toFixed(2)} m`, String(name)]}
         />
