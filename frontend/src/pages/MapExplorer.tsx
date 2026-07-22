@@ -983,18 +983,38 @@ export default function MapExplorer() {
   );
   const layerBlinkBright = useLayerBlinkPulse(expandedActiveLayerId != null);
 
+  /**
+   * Heavy layers: blinking remounts them onto SVG + drop-shadow filters and tanks the map.
+   * Keep them steady when their active-layer card is open.
+   */
+  const noBlinkLayers = useMemo(
+    () =>
+      new Set([
+        "barren_land",
+        "road_network",
+        "lulc",
+        "road_formation",
+        "trees",
+        "contours_1m",
+        "contours_0_5m",
+      ]),
+    [],
+  );
+  const layerAllowsBlink = (id: string) =>
+    expandedActiveLayerId === id && !noBlinkLayers.has(id);
+
   /** Remount key suffix so a GeoJSON layer switches to the blink SVG renderer. */
-  const blinkKey = (id: string) => (expandedActiveLayerId === id ? "blink" : "steady");
+  const blinkKey = (id: string) => (layerAllowsBlink(id) ? "blink" : "steady");
   /** Bump the stroke weight of a path style while its active-layer card is open. */
   const withBlink = (id: string, base: L.PathOptions): L.PathOptions =>
-    expandedActiveLayerId === id ? { ...base, weight: (base.weight ?? 1) + 1.5 } : base;
+    layerAllowsBlink(id) ? { ...base, weight: (base.weight ?? 1) + 1.5 } : base;
   /**
    * Top-level GeoJSON options that force the SVG renderer + glow class on the
    * child paths (needed because the map uses preferCanvas). Spread onto <GeoJSON>.
    * Returned as `object` so the untyped `renderer`/`className` props pass through.
    */
   const blinkGeoJson = (id: string): object =>
-    expandedActiveLayerId === id
+    layerAllowsBlink(id)
       ? { renderer: blinkSvgRenderer, className: "active-layer-blink" }
       : {};
 
@@ -2706,7 +2726,7 @@ export default function MapExplorer() {
             <TreesLayer
               trees={treesData.trees}
               interactive={!measure}
-              blink={expandedActiveLayerId === "trees"}
+              blink={false}
             />
           )}
 
@@ -2715,7 +2735,7 @@ export default function MapExplorer() {
             <ContoursLayer
               data={contours1m}
               weight={1.4}
-              blink={expandedActiveLayerId === "contours_1m"}
+              blink={false}
             />
           )}
           {overlays.contours_0_5m && contours05m && (
@@ -2723,7 +2743,7 @@ export default function MapExplorer() {
               data={contours05m}
               weight={1.1}
               opacity={0.75}
-              blink={expandedActiveLayerId === "contours_0_5m"}
+              blink={false}
             />
           )}
 
@@ -2862,20 +2882,17 @@ export default function MapExplorer() {
                 }
                 if (cur.length > 1) segments.push(cur);
 
-                const rfBlink = expandedActiveLayerId === "road_formation";
                 return segments.map((positions, si) => (
                   <Polyline
-                    key={`rf-${branch.id}-${si}-${rfBlink ? "blink" : "steady"}`}
+                    key={`rf-${branch.id}-${si}`}
                     positions={positions}
-                    {...(rfBlink ? { renderer: blinkSvgRenderer } : {})}
                     pathOptions={{
                       color,
-                      weight: (branch.id === "centerline" ? 4 : 3) + (rfBlink ? 2 : 0),
+                      weight: branch.id === "centerline" ? 4 : 3,
                       opacity: 0.9,
                       dashArray: branch.id === "centerline" ? undefined : "8 6",
                       lineCap: "round",
                       lineJoin: "round",
-                      className: rfBlink ? "active-layer-blink" : undefined,
                     }}
                   >
                     <Tooltip sticky opacity={0.95} className="geovision-tooltip">
@@ -3840,8 +3857,10 @@ function StructurePopupContent({
       </div>
 
       <dl className="geovision-popup__rows">
-        <PopupRow label="Latitude" value={structure.lat.toFixed(6)} />
-        <PopupRow label="Longitude" value={structure.lon.toFixed(6)} />
+        <PopupRow
+          label="Lat, Lon"
+          value={`${structure.lat.toFixed(6)}, ${structure.lon.toFixed(6)}`}
+        />
         {detailRows.slice(0, 6).map(([k, v]) => (
           <PopupRow key={k} label={k.replace(/_/g, " ")} value={String(v)} />
         ))}
@@ -3884,8 +3903,10 @@ function RoadCategoryPopupContent({
       <dl className="geovision-popup__rows">
         <PopupRow label="Category" value={style.label} />
         <PopupRow label="KMZ label" value={point.name} />
-        <PopupRow label="Latitude" value={point.lat.toFixed(6)} />
-        <PopupRow label="Longitude" value={point.lon.toFixed(6)} />
+        <PopupRow
+          label="Lat, Lon"
+          value={`${point.lat.toFixed(6)}, ${point.lon.toFixed(6)}`}
+        />
         {point.alt != null && !Number.isNaN(point.alt) && (
           <PopupRow label="Elevation" value={`${point.alt} m`} />
         )}
@@ -3932,8 +3953,10 @@ function TollPlazaPopupContent({
         {distM != null && (
           <PopupRow label="Offset from alignment" value={`${Math.round(distM)} m`} />
         )}
-        <PopupRow label="Latitude" value={point.lat.toFixed(6)} />
-        <PopupRow label="Longitude" value={point.lon.toFixed(6)} />
+        <PopupRow
+          label="Lat, Lon"
+          value={`${point.lat.toFixed(6)}, ${point.lon.toFixed(6)}`}
+        />
         {point.alt != null && !Number.isNaN(point.alt) && (
           <PopupRow label="Elevation" value={`${point.alt} m`} />
         )}
@@ -3974,8 +3997,10 @@ function PointPopupContent({
       <div className="geovision-popup__badge">{point.kind}</div>
 
       <dl className="geovision-popup__rows">
-        <PopupRow label="Latitude" value={point.lat.toFixed(6)} />
-        <PopupRow label="Longitude" value={point.lon.toFixed(6)} />
+        <PopupRow
+          label="Lat, Lon"
+          value={`${point.lat.toFixed(6)}, ${point.lon.toFixed(6)}`}
+        />
         {point.alt != null && !Number.isNaN(point.alt) && (
           <PopupRow label="Elevation" value={`${point.alt} m`} />
         )}
@@ -4067,9 +4092,11 @@ function GroundScourPointCard({ point }: { point: GroundScourPoint }) {
         <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500">
           Location
         </div>
-        <div className="grid grid-cols-2 gap-1.5">
-          <Metric label="Latitude" value={fmt(point.latitude, 6)} />
-          <Metric label="Longitude" value={fmt(point.longitude, 6)} />
+        <div className="grid grid-cols-1 gap-1.5">
+          <Metric
+            label="Lat, Lon"
+            value={`${fmt(point.latitude, 6)}, ${fmt(point.longitude, 6)}`}
+          />
         </div>
       </div>
 

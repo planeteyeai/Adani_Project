@@ -160,9 +160,15 @@ export default function BoreholeCard({
 
         <div className="min-h-0 flex-1 overflow-auto">
           {/* Meta strip */}
-          <div className="mx-6 mt-4 grid grid-cols-2 gap-4 rounded-xl border border-white/10 bg-white/5 px-5 py-3 sm:grid-cols-4">
-            <Meta label="Latitude" value={borehole.lat != null ? borehole.lat.toFixed(6) : "—"} />
-            <Meta label="Longitude" value={borehole.lon != null ? borehole.lon.toFixed(6) : "—"} />
+          <div className="mx-6 mt-4 grid grid-cols-2 gap-4 rounded-xl border border-white/10 bg-white/5 px-5 py-3 sm:grid-cols-3">
+            <Meta
+              label="Lat, Lon"
+              value={
+                borehole.lat != null && borehole.lon != null
+                  ? `${borehole.lat.toFixed(6)}, ${borehole.lon.toFixed(6)}`
+                  : "—"
+              }
+            />
             <Meta label="Ground Water Table" value={groundWaterTable ? `${groundWaterTable} m` : "—"} />
             <Meta label="Depth Explored" value={`${n} m`} />
           </div>
