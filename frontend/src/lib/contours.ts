@@ -1,3 +1,5 @@
+import { slopePctToBand, type SlopeBandId } from "./elevation";
+
 export type ContourFeature = {
   type: "Feature";
   properties: {
@@ -29,6 +31,122 @@ export type ContourLine = {
   coords: [number, number][]; // [lon, lat]
   bbox: [number, number, number, number];
 };
+
+export type ContourSlopeSegment = {
+  id: string;
+  slopePct: number;
+  bandId: SlopeBandId;
+  bandLabel: string;
+  color: string;
+  /** Leaflet [lat, lon] positions */
+  positions: [number, number][];
+};
+
+type GridVertex = { lat: number; lon: number; elev: number };
+
+function metersBetween(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const mLat = 111_320;
+  const mLon = 111_320 * Math.cos((lat1 * Math.PI) / 180);
+  const dy = (lat2 - lat1) * mLat;
+  const dx = (lon2 - lon1) * mLon;
+  return Math.hypot(dx, dy);
+}
+
+/**
+ * Terrain slope from contour spacing: for each contour segment, find the nearest
+ * vertex on a contour of a different elevation and compute
+ *   slope% = |Δelevation| / horizontal_distance × 100.
+ * Closely-spaced contours ⇒ steep. Returns map polylines coloured by slope band.
+ */
+export function buildContourSlopeSegments(
+  data: ContoursData | null,
+  opts: { searchRadiusM?: number; cellDeg?: number } = {},
+): ContourSlopeSegment[] {
+  if (!data?.features?.length) return [];
+  const searchRadiusM = opts.searchRadiusM ?? 250;
+  const cellDeg = opts.cellDeg ?? 0.0025; // ~275 m cells
+
+  // Index every contour vertex (with elevation) into a coarse spatial grid.
+  const grid = new Map<string, GridVertex[]>();
+  const key = (lat: number, lon: number) =>
+    `${Math.floor(lat / cellDeg)},${Math.floor(lon / cellDeg)}`;
+  for (const f of data.features) {
+    const elev = f.properties.elevation;
+    if (elev == null || !Number.isFinite(elev)) continue;
+    for (const c of f.geometry.coordinates ?? []) {
+      const lon = c[0];
+      const lat = c[1];
+      const k = key(lat, lon);
+      const bucket = grid.get(k);
+      const v = { lat, lon, elev };
+      if (bucket) bucket.push(v);
+      else grid.set(k, [v]);
+    }
+  }
+
+  const nearestOtherElev = (
+    lat: number,
+    lon: number,
+    elev: number,
+  ): { dist: number; dElev: number } | null => {
+    const cLat = Math.floor(lat / cellDeg);
+    const cLon = Math.floor(lon / cellDeg);
+    let bestDist = Infinity;
+    let bestDElev = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const bucket = grid.get(`${cLat + dy},${cLon + dx}`);
+        if (!bucket) continue;
+        for (const v of bucket) {
+          if (v.elev === elev) continue;
+          const d = metersBetween(lat, lon, v.lat, v.lon);
+          if (d < bestDist) {
+            bestDist = d;
+            bestDElev = Math.abs(v.elev - elev);
+          }
+        }
+      }
+    }
+    if (!Number.isFinite(bestDist) || bestDist > searchRadiusM || bestDist <= 0) {
+      return null;
+    }
+    return { dist: bestDist, dElev: bestDElev };
+  };
+
+  const out: ContourSlopeSegment[] = [];
+  for (const f of data.features) {
+    const elev = f.properties.elevation;
+    if (elev == null || !Number.isFinite(elev)) continue;
+    const coords = f.geometry.coordinates ?? [];
+    for (let i = 1; i < coords.length; i++) {
+      const a = coords[i - 1];
+      const b = coords[i];
+      const midLat = (a[1] + b[1]) / 2;
+      const midLon = (a[0] + b[0]) / 2;
+      const hit = nearestOtherElev(midLat, midLon, elev);
+      if (!hit) continue;
+      const slopePct = Math.round((hit.dElev / hit.dist) * 10000) / 100;
+      const band = slopePctToBand(slopePct);
+      out.push({
+        id: `${f.properties.id}-${i}`,
+        slopePct,
+        bandId: band.id,
+        bandLabel: band.name,
+        color: band.color,
+        positions: [
+          [a[1], a[0]],
+          [b[1], b[0]],
+        ],
+      });
+    }
+  }
+  return out;
+}
 
 const cache = new Map<string, ContoursData>();
 

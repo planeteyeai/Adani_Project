@@ -31,7 +31,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { fetchMetrics, fetchProject } from "../lib/api";
-import { elevationToMetricsProfile, fetchElevationProfile } from "../lib/elevation";
+import { avgSlopePctFromProfile, elevationToMetricsProfile, fetchElevationProfile, slopeBandsFromProfile } from "../lib/elevation";
 import { fetchGeotech, type GeotechData } from "../lib/geotech";
 import { fetchLulc, type LulcData } from "../lib/lulc";
 import {
@@ -88,7 +88,7 @@ const DATA_VIEWS: { id: DataView; label: string; hint: string }[] = [
   { id: "flood", label: "Flood Risk", hint: "Satellite water & gauge levels at Digha Ghat" },
   { id: "scour", label: "Scour & HFL", hint: "Predictive bridge scour & design HFL" },
   { id: "road_formation", label: "Road Formation", hint: "Formation level vs ground elevation" },
-  { id: "slope_risk", label: "Slope", hint: "Slope band distribution" },
+  { id: "slope_risk", label: "Slope", hint: "Slope bands calculated from elevation survey" },
   { id: "structures", label: "Structures & Schedule-B", hint: "Inventory and engineering register" },
   { id: "geotech", label: "Geotechnical", hint: "36 borehole soil-test logs" },
 ];
@@ -133,7 +133,7 @@ export default function Dashboard() {
             elevation_profile: profile,
             min_elevation_m: Math.min(...elevs),
             max_elevation_m: Math.max(...elevs),
-            avg_slope_pct: m.avg_slope_pct,
+            avg_slope_pct: avgSlopePctFromProfile(profile),
           });
         } else {
           setMetrics(m);
@@ -179,9 +179,11 @@ export default function Dashboard() {
   const landUseData =
     lulcClasses.length > 0
       ? lulcClasses.map((c) => ({ name: c.name, value: c.count, color: c.color }))
-      : Object.entries(m.land_use).map(([name, value]) => ({ name, value }));
-  const slopeData = Object.entries(m.slope_bands).map(([name, value]) => ({ name, value }));
-
+      : [];
+  const slopeData = slopeBandsFromProfile(m.elevation_profile);
+  const hasElevation = m.elevation_profile.length >= 2;
+  const hasCutFill = (cutFillInfo?.fillM3 ?? 0) > 0 || (cutFillInfo?.cutM3 ?? 0) > 0;
+  const hasStructures = m.total_structures > 0 && !!scheduleB;
   // Corridor-wide summaries for the newer datasets (not section-scoped).
   const scour = summarizeGroundScour(groundScour);
   const roadForm = summarizeRoadFormation(roadFormation);
@@ -249,14 +251,14 @@ export default function Dashboard() {
             <Kpi
               icon={<TriangleRight className="h-5 w-5" />}
               label="Avg Slope"
-              value={`${m.avg_slope_pct}%`}
+              value={hasElevation ? `${m.avg_slope_pct}%` : "—"}
               tint="text-amber-400"
             />
             <Kpi
               icon={<Layers className="h-5 w-5" />}
               label="Total Fill"
               value={
-                earthwork.fillM3 > 0
+                hasCutFill
                   ? `${(earthwork.fillM3 / 1e6).toFixed(2)} Mm³`
                   : "—"
               }
@@ -265,7 +267,7 @@ export default function Dashboard() {
             <Kpi
               icon={<Mountain className="h-5 w-5" />}
               label="Structures"
-              value={String(m.total_structures)}
+              value={hasStructures ? String(m.total_structures) : "—"}
               tint="text-violet-400"
             />
             <Kpi
@@ -275,6 +277,13 @@ export default function Dashboard() {
               tint="text-fuchsia-400"
             />
           </div>
+        )}
+
+        {(view === "overview" || view === "earthwork" || view === "elevation") && (
+          <p className="mt-2 text-[11px] text-slate-500">
+            Avg Slope calculated from elevation survey · Fill from excavation datasheet · Structures
+            from Schedule-B · Boreholes from soil investigation
+          </p>
         )}
 
         {view === "overview" && (
@@ -325,16 +334,44 @@ export default function Dashboard() {
 
             <div className="mt-6 grid gap-4 lg:grid-cols-3">
               <Panel title="Elevation Profile" className="lg:col-span-2">
-                <ElevationChart data={m.elevation_profile} />
+                {hasElevation ? (
+                  <>
+                    <ElevationChart data={m.elevation_profile} />
+                    <SourceNote text="From elevation survey (centreline)" />
+                  </>
+                ) : (
+                  <p className="text-sm text-slate-400">Elevation survey data unavailable.</p>
+                )}
               </Panel>
               <Panel title="Cut & Fill Balance">
-                <EarthworkChart data={earthworkData} />
+                {hasCutFill ? (
+                  <>
+                    <EarthworkChart data={earthworkData} />
+                    <SourceNote text="From excavation datasheet (LHS + RHS)" />
+                  </>
+                ) : (
+                  <p className="text-sm text-slate-400">Cut & fill data unavailable.</p>
+                )}
               </Panel>
               <Panel title="Land Use / LULC">
-                <LandUseChart data={landUseData} />
+                {landUseData.length > 0 ? (
+                  <>
+                    <LandUseChart data={landUseData} />
+                    <SourceNote text="From LULC classification polygons" />
+                  </>
+                ) : (
+                  <p className="text-sm text-slate-400">LULC data unavailable.</p>
+                )}
               </Panel>
               <Panel title="Slope Distribution">
-                <SlopeChart data={slopeData} />
+                {slopeData.length > 0 ? (
+                  <>
+                    <SlopeChart data={slopeData} />
+                    <SourceNote text="Calculated from elevation survey segments" />
+                  </>
+                ) : (
+                  <p className="text-sm text-slate-400">Elevation survey data unavailable.</p>
+                )}
               </Panel>
             </div>
           </>
@@ -366,6 +403,7 @@ export default function Dashboard() {
                 )}
               </div>
               <ElevationChart data={m.elevation_profile} height={340} />
+              <SourceNote text="From elevation survey · Avg Slope & bands calculated from consecutive centreline segments" />
             </Panel>
           </div>
         )}
@@ -548,41 +586,54 @@ export default function Dashboard() {
 
             <div className="grid gap-4 lg:grid-cols-2">
               <Panel title="Land Use Classification (LULC)">
-                <LandUseChart data={landUseData} height={300} />
+                {landUseData.length > 0 ? (
+                  <>
+                    <LandUseChart data={landUseData} height={300} />
+                    <SourceNote text="From LULC classification polygons · values as % of total" />
+                  </>
+                ) : (
+                  <p className="text-sm text-slate-400">LULC data unavailable.</p>
+                )}
               </Panel>
               <Panel title="Class breakdown">
-                <div className="space-y-2">
-                  {(() => {
-                    const total = landUseData.reduce(
-                      (sum, row) => sum + (Number(row.value) || 0),
-                      0,
-                    );
-                    return landUseData.map((row, i) => {
-                      const pct =
-                        total > 0 ? ((Number(row.value) || 0) / total) * 100 : Number(row.value) || 0;
-                      return (
-                        <div
-                          key={row.name}
-                          className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-sm"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span
-                              className="h-2.5 w-2.5 rounded-sm"
-                              style={{
-                                background:
-                                  "color" in row && row.color
-                                    ? String(row.color)
-                                    : COLORS[i % COLORS.length],
-                              }}
-                            />
-                            <span className="text-slate-300">{row.name}</span>
-                          </div>
-                          <span className="tabular-nums text-white">{pct.toFixed(1)}%</span>
-                        </div>
+                {landUseData.length > 0 ? (
+                  <div className="space-y-2">
+                    {(() => {
+                      const total = landUseData.reduce(
+                        (sum, row) => sum + (Number(row.value) || 0),
+                        0,
                       );
-                    });
-                  })()}
-                </div>
+                      return landUseData.map((row, i) => {
+                        const pct =
+                          total > 0
+                            ? ((Number(row.value) || 0) / total) * 100
+                            : Number(row.value) || 0;
+                        return (
+                          <div
+                            key={row.name}
+                            className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-sm"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="h-2.5 w-2.5 rounded-sm"
+                                style={{
+                                  background:
+                                    "color" in row && row.color
+                                      ? String(row.color)
+                                      : COLORS[i % COLORS.length],
+                                }}
+                              />
+                              <span className="text-slate-300">{row.name}</span>
+                            </div>
+                            <span className="tabular-nums text-white">{pct.toFixed(1)}%</span>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-400">LULC data unavailable.</p>
+                )}
               </Panel>
             </div>
 
@@ -908,7 +959,14 @@ export default function Dashboard() {
         {view === "slope_risk" && (
           <div className="mt-6">
             <Panel title="Slope Distribution">
-              <SlopeChart data={slopeData} height={300} />
+              {slopeData.length > 0 ? (
+                <>
+                  <SlopeChart data={slopeData} height={300} />
+                  <SourceNote text="Calculated from elevation survey: share of centreline segments in each grade band" />
+                </>
+              ) : (
+                <p className="text-sm text-slate-400">Elevation survey data unavailable.</p>
+              )}
             </Panel>
           </div>
         )}
@@ -916,14 +974,21 @@ export default function Dashboard() {
         {view === "structures" && (
           <div className="mt-6 space-y-4">
             <Panel title="Structures Inventory">
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-                {Object.entries(m.structures).map(([k, v]) => (
-                  <div key={k} className="rounded-xl border border-white/10 bg-white/5 p-4 text-center">
-                    <div className="text-3xl font-extrabold gradient-text">{v}</div>
-                    <div className="mt-1 text-xs capitalize text-slate-400">{k.replace(/_/g, " ")}</div>
+              {hasStructures ? (
+                <>
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+                    {Object.entries(m.structures).map(([k, v]) => (
+                      <div key={k} className="rounded-xl border border-white/10 bg-white/5 p-4 text-center">
+                        <div className="text-3xl font-extrabold gradient-text">{v}</div>
+                        <div className="mt-1 text-xs capitalize text-slate-400">{k.replace(/_/g, " ")}</div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                  <SourceNote text="From Schedule-B engineering register (underpasses, overpasses, interchanges, culverts, RE walls, elevated, drains)" />
+                </>
+              ) : (
+                <p className="text-sm text-slate-400">Schedule-B structure data unavailable.</p>
+              )}
             </Panel>
 
             {scheduleB && (
@@ -1076,10 +1141,15 @@ function scopeMetrics(
     elevation_profile: profile.length ? profile : metrics.elevation_profile,
     min_elevation_m: Math.round(minElev * 10) / 10,
     max_elevation_m: Math.round(maxElev * 10) / 10,
+    avg_slope_pct: profile.length >= 2 ? avgSlopePctFromProfile(profile) : metrics.avg_slope_pct,
+    slope_bands: Object.fromEntries(
+      (profile.length >= 2 ? slopeBandsFromProfile(profile) : []).map((r) => [r.name, r.value]),
+    ),
+    land_use: Object.fromEntries(lulcClasses.map((c) => [c.name, c.count])),
     earthwork,
     structures,
     total_structures,
-    estimated_cost_cr: Math.round(metrics.estimated_cost_cr * scale * 10) / 10,
+    estimated_cost_cr: 0,
     schedule_b: scheduleB,
   };
 
@@ -1674,6 +1744,10 @@ function Panel({
       {children}
     </div>
   );
+}
+
+function SourceNote({ text }: { text: string }) {
+  return <p className="mt-3 text-[11px] leading-snug text-slate-500">{text}</p>;
 }
 
 function fmt(n: number): string {

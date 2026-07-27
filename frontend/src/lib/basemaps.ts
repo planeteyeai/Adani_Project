@@ -255,7 +255,7 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
     color: "#ea580c",
   },
   { id: "corridor", name: "RoW Corridor Buffer", description: "Right-of-way influence buffer", group: "Analysis", color: "#38e1c6" },
-  { id: "slope", name: "Slope Heat (sim)", description: "Simulated slope severity along route", group: "Analysis", color: "#f97316" },
+  { id: "slope", name: "Slope Heat", description: "Corridor grade from elevation survey (absolute % between stations)", group: "Analysis", color: "#f97316" },
 ];
 
 /** Ordered list of overlay groups for rendering the layers panel. */

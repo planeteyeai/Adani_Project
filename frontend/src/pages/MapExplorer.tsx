@@ -84,7 +84,7 @@ import { ANALYSIS_OVERLAYS, ANALYSIS_OVERLAY_GROUPS, BASEMAPS, type AnalysisOver
 import { fetchProject } from "../lib/api";
 import { useTopBarWeather } from "../lib/topBarWeather";
 import { createChainageResolver, sampleChainageRange } from "../lib/chainage";
-import { elevationMapSample, fetchElevationProfile } from "../lib/elevation";
+import { buildSlopeHeatSegments, elevationMapSample, fetchElevationProfile, SLOPE_BAND_LEGEND } from "../lib/elevation";
 import { fetchDesignHfl, type DesignHflPoint } from "../lib/designHfl";
 import {
   MEASURE_TOOLS,
@@ -131,7 +131,7 @@ import { fetchWaterBodies, fetchWaterways, type WaterBodiesData } from "../lib/w
 import { fetchVillages, type VillagesData } from "../lib/villages";
 import { fetchLulc, lulcSummaryInfo, type LulcData, type LulcSummaryInfo } from "../lib/lulc";
 import { fetchBarrenLand, type BarrenLandData } from "../lib/barrenLand";
-import { fetchContours05m, fetchContours1m, type ContoursData } from "../lib/contours";
+import { buildContourSlopeSegments, fetchContours05m, fetchContours1m, type ContoursData } from "../lib/contours";
 import { fetchAdjacentRoads, type AdjacentRoadsData } from "../lib/adjacentRoads";
 import { fetchRoadNetwork, highwayStyle, type RoadNetworkData } from "../lib/roadNetwork";
 import {
@@ -997,6 +997,7 @@ export default function MapExplorer() {
         "trees",
         "contours_1m",
         "contours_0_5m",
+        "slope",
       ]),
     [],
   );
@@ -1071,6 +1072,18 @@ export default function MapExplorer() {
         (a, b) => Number(a.chainage) - Number(b.chainage) || String(a.branch).localeCompare(String(b.branch)),
       ),
     [elevationPoints],
+  );
+
+  const slopeHeatSegments = useMemo(
+    () => buildSlopeHeatSegments(elevationPoints),
+    [elevationPoints],
+  );
+
+  // Terrain slope across the whole area, derived from contour spacing
+  // (close contours ⇒ steep). Only computed when the Slope Heat layer is on.
+  const contourSlopeSegments = useMemo(
+    () => (overlays.slope ? buildContourSlopeSegments(contours1m) : []),
+    [overlays.slope, contours1m],
   );
 
   const roadFormationLines = useMemo(() => {
@@ -2039,16 +2052,15 @@ export default function MapExplorer() {
             lineFeatures.map((line, i) => {
               if (hiddenAlignmentColors.has(line.stroke)) return null;
               const positions = line.coords.map((c) => [c[1], c[0]]) as [number, number][];
-              const color = overlays.slope ? slopeColor(i) : line.stroke;
-              const weight = overlays.slope ? 3 : Math.min(6, Math.max(2, line.weight));
+              const weight = Math.min(6, Math.max(2, line.weight));
               return (
               <Polyline
                 key={"al" + i}
                   positions={positions}
                 pathOptions={{
-                    color,
+                    color: line.stroke,
                     weight,
-                  opacity: 0.95,
+                  opacity: overlays.slope ? 0.35 : 0.95,
                     interactive: false,
                     className:
                       expandedActiveLayerId === "alignment" ? "active-layer-blink" : undefined,
@@ -2067,6 +2079,54 @@ export default function MapExplorer() {
               </Polyline>
               );
             })}
+
+          {/* Terrain slope from contour spacing (whole-area heat, drawn under corridor) */}
+          {overlays.slope &&
+            contourSlopeSegments.map((seg) => (
+              <Polyline
+                key={`c-${seg.id}`}
+                positions={seg.positions}
+                pathOptions={{
+                  color: seg.color,
+                  weight: 2,
+                  opacity: 0.55,
+                  lineCap: "round",
+                  lineJoin: "round",
+                }}
+                interactive={false}
+              />
+            ))}
+
+          {/* Slope heat — absolute grade between elevation survey stations */}
+          {overlays.slope &&
+            slopeHeatSegments.map((seg) => (
+              <Polyline
+                key={seg.id}
+                positions={seg.positions}
+                pathOptions={{
+                  color: seg.color,
+                  weight: 6,
+                  opacity: 0.95,
+                  lineCap: "butt",
+                  lineJoin: "round",
+                  className:
+                    expandedActiveLayerId === "slope" ? "active-layer-blink" : undefined,
+                }}
+                {...(expandedActiveLayerId === "slope"
+                  ? { renderer: blinkSvgRenderer }
+                  : {})}
+              >
+                <Tooltip sticky opacity={0.95} className="geovision-tooltip">
+                  <span className="font-semibold">Slope · {seg.bandLabel}</span>
+                  <br />
+                  <span className="text-slate-300">{seg.slopePct.toFixed(2)}%</span>
+                  <br />
+                  <span className="text-slate-400">
+                    Ch {seg.fromKm.toFixed(2)}–{seg.toKm.toFixed(2)} km
+                  </span>
+                </Tooltip>
+              </Polyline>
+            ))}
 
           {/* Schedule-B linear corridor features */}
           {overlays.sb_elevated && (
@@ -5483,19 +5543,17 @@ function AlignmentColorLegend({
 }
 
 function SlopeLegend() {
-  const items = [
-    ["#22c55e", "0–5% Easy"],
-    ["#eab308", "5–10% Moderate"],
-    ["#f97316", "10–20% Difficult"],
-    ["#ef4444", ">20% Severe"],
-  ];
   return (
     <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-3">
-      <div className="mb-2 text-xs font-semibold text-white">Slope severity (simulated)</div>
+      <div className="mb-2 text-xs font-semibold text-white">Slope severity</div>
+      <p className="mb-2 text-[10px] leading-snug text-slate-500">
+        Bold line = grade between centreline survey stations. Thin lines = terrain
+        slope from 1 m contour spacing (close contours ⇒ steep).
+      </p>
       <div className="space-y-1">
-        {items.map(([c, l]) => (
-          <div key={l} className="flex items-center gap-2 text-xs text-slate-300">
-            <span className="h-2.5 w-6 rounded" style={{ background: c }} /> {l}
+        {SLOPE_BAND_LEGEND.map((item) => (
+          <div key={item.id} className="flex items-center gap-2 text-xs text-slate-300">
+            <span className="h-2.5 w-6 rounded" style={{ background: item.color }} /> {item.label}
           </div>
         ))}
       </div>
@@ -6198,13 +6256,6 @@ function MeasureHandler({
     },
   });
   return null;
-}
-
-function slopeColor(i: number): string {
-  const palette = ["#22c55e", "#22c55e", "#eab308", "#f97316", "#ef4444"];
-  const h = (Math.sin(i * 12.9898) * 43758.5453) % 1;
-  const idx = Math.floor(Math.abs(h) * palette.length) % palette.length;
-  return palette[idx];
 }
 
 /**
