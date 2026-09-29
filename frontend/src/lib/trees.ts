@@ -91,6 +91,7 @@ export async function fetchTrees(): Promise<TreesData | null> {
   try {
     if (!cache) {
       const res = await fetch("/trees.json", {
+        cache: "no-store",
         signal: AbortSignal.timeout(30000),
       });
       if (!res.ok) return null;

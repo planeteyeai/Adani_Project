@@ -138,6 +138,13 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
     color: "#facc15",
   },
   {
+    id: "transmission_11kv",
+    name: "11 kV Transmission Line",
+    description: "11 kV distribution line along the corridor",
+    group: "Utilities",
+    color: "#fb923c",
+  },
+  {
     id: "substations",
     name: "Substations",
     description: "Electrical substation footprints",
@@ -221,7 +228,7 @@ export const ANALYSIS_OVERLAYS: AnalysisOverlay[] = [
   {
     id: "affected_houses",
     name: "Structures within Acquisition Boundary",
-    description: "Building footprints inside the land acquisition boundary",
+    description: "Segregated settle.kml footprints only (House, Temple, School, …)",
     group: "Social Impact",
     color: "#ef4444",
   },

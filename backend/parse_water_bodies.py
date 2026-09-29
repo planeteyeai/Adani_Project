@@ -1,4 +1,4 @@
-"""Parse water-body polygons from KML into GeoJSON for the frontend."""
+"""Parse water bodies + waterways KMLs into GeoJSON for the frontend."""
 from __future__ import annotations
 
 import json
@@ -6,10 +6,12 @@ import os
 import re
 import xml.etree.ElementTree as ET
 
-SRC = r"C:\Users\Kunal.Desale\Downloads\3f93dc9b031b4125841e26733b3c90ed.kml"
-OUT = os.path.join(
-    os.path.dirname(__file__), "..", "frontend", "public", "water_bodies.json"
-)
+WATER_BODIES_SRC = r"C:\Users\Kunal.Desale\Downloads\3f93dc9b031b4125841e26733b3c90ed.kml"
+WATERWAYS_SRC = r"C:\Users\Kunal.Desale\Downloads\b5a1571e26084819bea8aa2bd45db81e.kml"
+
+PUBLIC = os.path.join(os.path.dirname(__file__), "..", "frontend", "public")
+WATER_BODIES_OUT = os.path.join(PUBLIC, "water_bodies.json")
+WATERWAYS_OUT = os.path.join(PUBLIC, "waterways.json")
 
 _NS_RE = re.compile(r"\{.*?\}")
 _WS_RE = re.compile(r"\s+")
@@ -34,7 +36,14 @@ def _parse_ring(text: str) -> list[list[float]]:
     return ring
 
 
-def parse_kml(path: str) -> dict:
+def parse_kml(
+    path: str,
+    *,
+    title: str,
+    description: str,
+    id_prefix: str,
+    default_name: str,
+) -> dict:
     root = ET.parse(path).getroot()
     features: list[dict] = []
     folder_stack: list[str] = []
@@ -48,6 +57,8 @@ def parse_kml(path: str) -> dict:
                 name = child.text.strip() or None
 
         folder = " / ".join(folder_stack) if folder_stack else None
+        pm_id = pm.attrib.get("id")
+
         for geom in pm.iter():
             if _localname(geom.tag) != "Polygon":
                 continue
@@ -61,10 +72,11 @@ def parse_kml(path: str) -> dict:
                         {
                             "type": "Feature",
                             "properties": {
-                                "id": f"WB-{idx:03d}",
+                                "id": f"{id_prefix}-{idx:03d}",
                                 "index": idx,
-                                "name": name or f"Water body {idx}",
+                                "name": name or f"{default_name} {idx}",
                                 "folder": folder,
+                                "source_id": pm_id,
                             },
                             "geometry": {
                                 "type": "Polygon",
@@ -96,8 +108,10 @@ def parse_kml(path: str) -> dict:
 
     walk(root)
     return {
-        "title": "Water Bodies",
-        "description": "Water body polygons along the project corridor",
+        "title": title,
+        "description": description,
+        "source_file": os.path.basename(path),
+        "source_folder": None,
         "count": len(features),
         "type": "FeatureCollection",
         "features": features,
@@ -105,11 +119,35 @@ def parse_kml(path: str) -> dict:
 
 
 def main() -> None:
-    data = parse_kml(SRC)
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "w", encoding="utf-8") as f:
-        json.dump(data, f, separators=(",", ":"))
-    print(f"Wrote {data['count']} water bodies -> {OUT}")
+    os.makedirs(PUBLIC, exist_ok=True)
+
+    if not os.path.isfile(WATER_BODIES_SRC):
+        raise SystemExit(f"Water bodies KML not found: {WATER_BODIES_SRC}")
+    if not os.path.isfile(WATERWAYS_SRC):
+        raise SystemExit(f"Waterways KML not found: {WATERWAYS_SRC}")
+
+    bodies = parse_kml(
+        WATER_BODIES_SRC,
+        title="Water Bodies",
+        description="Ponds, lakes and water polygons along the corridor",
+        id_prefix="WB",
+        default_name="Water body",
+    )
+    ways = parse_kml(
+        WATERWAYS_SRC,
+        title="Waterways",
+        description="Waterway / canal polygons along the project corridor",
+        id_prefix="WW",
+        default_name="Waterway",
+    )
+
+    with open(WATER_BODIES_OUT, "w", encoding="utf-8") as f:
+        json.dump(bodies, f, separators=(",", ":"))
+    with open(WATERWAYS_OUT, "w", encoding="utf-8") as f:
+        json.dump(ways, f, separators=(",", ":"))
+
+    print(f"Wrote {bodies['count']} water bodies -> {WATER_BODIES_OUT}")
+    print(f"Wrote {ways['count']} waterways -> {WATERWAYS_OUT}")
 
 
 if __name__ == "__main__":

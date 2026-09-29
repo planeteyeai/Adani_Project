@@ -27,7 +27,7 @@ import type { Project } from "../lib/types";
 import type { ContoursData } from "../lib/contours";
 import { highwayStyle, type RoadNetworkData } from "../lib/roadNetwork";
 import type { RailwayLinesData, RailwayPlatformsData, RailwayStationsData } from "../lib/railway";
-import type { SubstationsData, TransmissionLinesData, TransmissionTowersData } from "../lib/transmission";
+import type { SubstationsData, Transmission11kvData, TransmissionLinesData, TransmissionTowersData } from "../lib/transmission";
 import type { WaterBodiesData } from "../lib/waterBodies";
 import type { LulcData } from "../lib/lulc";
 import type { TreesData } from "../lib/trees";
@@ -90,6 +90,7 @@ type Props = {
   railwayStations: RailwayStationsData | null;
   railwayPlatforms: RailwayPlatformsData | null;
   transmissionLines: TransmissionLinesData | null;
+  transmission11kv: Transmission11kvData | null;
   substations: SubstationsData | null;
   transmissionTowers: TransmissionTowersData | null;
   waterBodies: WaterBodiesData | null;
@@ -501,6 +502,7 @@ export default function Map3DView(props: Props) {
     railwayStations,
     railwayPlatforms,
     transmissionLines,
+    transmission11kv,
     substations,
     transmissionTowers,
     waterBodies,
@@ -616,6 +618,7 @@ export default function Map3DView(props: Props) {
     railwayStations,
     railwayPlatforms,
     transmissionLines,
+    transmission11kv,
     substations,
     transmissionTowers,
     waterBodies,
@@ -802,6 +805,30 @@ async function syncAll(viewer: Viewer, p: Props, hasTerrain: boolean) {
       styleLines(ds, { defaultColor: "#facc15", width: 3 }),
     );
   } else await removeDs(viewer, "3d-tline");
+
+  if (o.transmission_11kv && p.transmission11kv) {
+    const lines = {
+      type: "FeatureCollection" as const,
+      features: p.transmission11kv.features.filter((f) => f.geometry.type === "LineString"),
+    };
+    const poles = {
+      type: "FeatureCollection" as const,
+      features: p.transmission11kv.features
+        .filter((f) => f.geometry.type === "Point")
+        .map((f) => ({
+          type: "Feature" as const,
+          properties: { name: f.properties.name, fill: "#fb923c" },
+          geometry: f.geometry,
+        })),
+    };
+    await upsert(viewer, "3d-t11kv", lines, (ds) =>
+      styleLines(ds, { defaultColor: "#fb923c", width: 3 }),
+    );
+    await upsert(viewer, "3d-t11kv-poles", poles, (ds) => stylePoints(ds, "#fb923c", 5));
+  } else {
+    await removeDs(viewer, "3d-t11kv");
+    await removeDs(viewer, "3d-t11kv-poles");
+  }
 
   if (o.substations && p.substations) {
     await upsert(viewer, "3d-sub", p.substations, (ds) =>

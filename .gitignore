@@ -21,3 +21,4 @@ frontend/*.tsbuildinfo
 kmz_extracted/
 terrain_extracted/
 pipeline.kmz.zip
+backend/_flood_tmp/

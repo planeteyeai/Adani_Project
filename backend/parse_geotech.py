@@ -8,9 +8,12 @@ from pathlib import Path
 
 import openpyxl
 
-# Complete soil analysis workbook (locations + layer-wise tests for BH 01–35).
-SOIL_ANALYSIS_SRC = Path(r"C:\Users\Kunal.Desale\Downloads\c524e929f54b4dd28931c3ad9c48af8d.xlsx")
-OUT = Path(r"C:\Users\Kunal.Desale\Desktop\Adani\frontend\public\geotech_boreholes.json")
+# Complete soil analysis workbook (location headers + layer-wise tests).
+SOIL_ANALYSIS_SRC = Path(__file__).resolve().parent / "data" / "geotech_boreholes.xlsx"
+DOWNLOADS_FALLBACK = Path(
+    r"C:\Users\Kunal.Desale\Downloads\9d9c3ef623a1488d9abaee1235e96b49.xlsx"
+)
+OUT = Path(__file__).resolve().parents[1] / "frontend" / "public" / "geotech_boreholes.json"
 
 
 def dms_to_dd(s: str) -> list[float]:
@@ -50,17 +53,20 @@ def clean_depth(v: object) -> str:
 
 
 def parse_locations(ws) -> dict[int, tuple[float, float]]:
-    """Sheet1: Location NN + DMS coordinate string."""
+    """Parse coordinates from either split cells or ``Location NN: DMS`` headers."""
     coords: dict[int, tuple[float, float]] = {}
     for row in ws.iter_rows(values_only=True):
         if not row or row[0] is None:
             continue
         name = str(row[0]).strip()
-        m = re.match(r"Location\s*0?(\d+)$", name, re.I)
-        if not m or row[1] is None:
+        m = re.match(r"Location\s*0?(\d+)(?:\s*:)?", name, re.I)
+        if not m:
             continue
         num = int(m.group(1))
-        dd = dms_to_dd(str(row[1]))
+        coordinate_text = name
+        if len(row) > 1 and row[1] is not None:
+            coordinate_text += f" {row[1]}"
+        dd = dms_to_dd(coordinate_text)
         if len(dd) == 2:
             coords[num] = (dd[0], dd[1])
     return coords
@@ -108,14 +114,30 @@ def parse_soil_layers(ws) -> tuple[dict[int, list[dict]], list[str]]:
 
 
 def main() -> None:
-    if not SOIL_ANALYSIS_SRC.exists():
-        print(f"Missing workbook: {SOIL_ANALYSIS_SRC}", file=sys.stderr)
+    src = SOIL_ANALYSIS_SRC
+    if not src.exists() and DOWNLOADS_FALLBACK.exists():
+        src.parent.mkdir(parents=True, exist_ok=True)
+        import shutil
+
+        shutil.copy2(DOWNLOADS_FALLBACK, src)
+        print(f"Copied workbook → {src}")
+    if not src.exists():
+        print(f"Missing workbook: {src}", file=sys.stderr)
         sys.exit(1)
 
-    wb = openpyxl.load_workbook(SOIL_ANALYSIS_SRC, data_only=True)
-    # Prefer named sheets; fall back to first two sheets (Sheet1 / Sheet2).
-    loc_ws = wb["Sheet1"] if "Sheet1" in wb.sheetnames else wb[wb.sheetnames[0]]
-    soil_ws = wb["Sheet2"] if "Sheet2" in wb.sheetnames else wb[wb.sheetnames[1]]
+    wb = openpyxl.load_workbook(src, data_only=True)
+
+    # Coordinates: prefer a dedicated "Boreholes" sheet, else the combined Sheet1.
+    def pick(*names: str):
+        for n in names:
+            if n in wb.sheetnames:
+                return wb[n]
+        return wb[wb.sheetnames[0]]
+
+    loc_ws = pick("Boreholes", "Sheet1")
+    # Soil layers: use the 40 m log (matches the frontend borehole card); the same
+    # sheet may also hold the interleaved location headers in older workbooks.
+    soil_ws = pick("40m", "Sheet2")
 
     coords = parse_locations(loc_ws)
     soil_by_num, headers = parse_soil_layers(soil_ws)
@@ -138,7 +160,7 @@ def main() -> None:
 
     payload = {
         "title": "Geotechnical Investigation — Boreholes & Soil Test Summary",
-        "source_file": SOIL_ANALYSIS_SRC.name,
+        "source_file": src.name,
         "count": len(boreholes),
         "detailed_count": sum(1 for b in boreholes if b["layers"]),
         "columns": headers,
@@ -159,6 +181,14 @@ def main() -> None:
     missing = [b["id"] for b in boreholes if b["lat"] is None]
     if missing:
         print("MISSING COORDS:", ", ".join(missing), file=sys.stderr)
+
+    # Spot-check Location 36 (user-provided DMS).
+    bh36 = next((b for b in boreholes if b["id"] == "BH-36"), None)
+    if bh36:
+        print(
+            f"BH-36: {bh36['lat']}, {bh36['lon']} · layers={len(bh36['layers'])} "
+            f"top={bh36['layers'][0].get('Soil Class') if bh36['layers'] else None}"
+        )
 
 
 if __name__ == "__main__":

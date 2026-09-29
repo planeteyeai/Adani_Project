@@ -126,7 +126,12 @@ import {
   type CutFillSeriesVisibility,
 } from "../lib/cutFill";
 import CutFillLayer, { CutFillLegend, CutFillPointCard, type CutFillMapPoint } from "../components/CutFillLayer";
-import { fetchAffectedHouses, type AffectedHousesData } from "../lib/affectedHouses";
+import {
+  fetchAffectedHouses,
+  clearAffectedHousesCache,
+  buildingUseColor,
+  type AffectedHousesData,
+} from "../lib/affectedHouses";
 import { fetchWaterBodies, fetchWaterways, type WaterBodiesData } from "../lib/waterBodies";
 import { fetchVillages, type VillagesData } from "../lib/villages";
 import { fetchLulc, lulcSummaryInfo, type LulcData, type LulcSummaryInfo } from "../lib/lulc";
@@ -152,11 +157,14 @@ import {
 } from "../lib/railway";
 import {
   fetchSubstations,
+  fetchTransmission11kv,
   fetchTransmissionLines,
   fetchTransmissionTowers,
   SUBSTATION_STYLE,
+  TRANSMISSION_11KV_STYLE,
   TRANSMISSION_LINE_STYLE,
   type SubstationsData,
+  type Transmission11kvData,
   type TransmissionLinesData,
   type TransmissionTowersData,
 } from "../lib/transmission";
@@ -244,6 +252,7 @@ const DEFAULT_OVERLAYS: Record<string, boolean> = {
   railway_stations: false,
   railway_platforms: false,
   transmission_lines: false,
+  transmission_11kv: false,
   substations: false,
   transmission_towers: false,
   sb_elevated: false,
@@ -346,6 +355,10 @@ export default function MapExplorer() {
   const [designHflPoints, setDesignHflPoints] = useState<DesignHflPoint[]>([]);
   const [geotech, setGeotech] = useState<GeotechData | null>(null);
   const [affectedHouses, setAffectedHouses] = useState<AffectedHousesData | null>(null);
+  /** Empty set = show all use classes. Non-empty = only these ids visible. */
+  const [affectedHouseClasses, setAffectedHouseClasses] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [elevatedScour, setElevatedScour] = useState<ElevatedScourData | null>(null);
   const [groundScour, setGroundScour] = useState<GroundScourData | null>(null);
   const [roadFormation, setRoadFormation] = useState<RoadFormationData | null>(null);
@@ -377,6 +390,7 @@ export default function MapExplorer() {
   const [railwayStations, setRailwayStations] = useState<RailwayStationsData | null>(null);
   const [railwayPlatforms, setRailwayPlatforms] = useState<RailwayPlatformsData | null>(null);
   const [transmissionLines, setTransmissionLines] = useState<TransmissionLinesData | null>(null);
+  const [transmission11kv, setTransmission11kv] = useState<Transmission11kvData | null>(null);
   const [substations, setSubstations] = useState<SubstationsData | null>(null);
   const [transmissionTowers, setTransmissionTowers] = useState<TransmissionTowersData | null>(null);
   const [treesData, setTreesData] = useState<TreesData | null>(null);
@@ -464,6 +478,7 @@ export default function MapExplorer() {
       () => fetchRailwayStations().then(set(setRailwayStations)),
       () => fetchRailwayPlatforms().then(set(setRailwayPlatforms)),
       () => fetchTransmissionLines().then(set(setTransmissionLines)),
+      () => fetchTransmission11kv().then(set(setTransmission11kv)),
       () => fetchSubstations().then(set(setSubstations)),
       () => fetchTransmissionTowers().then(set(setTransmissionTowers)),
       () => fetchTrees().then(set(setTreesData)),
@@ -486,6 +501,18 @@ export default function MapExplorer() {
       setGroundScourCursor(null);
     }
   }, [overlays.ground_scour]);
+
+  useEffect(() => {
+    if (!overlays.affected_houses) return;
+    let cancelled = false;
+    clearAffectedHousesCache();
+    fetchAffectedHouses().then((data) => {
+      if (!cancelled && data) setAffectedHouses(data);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [overlays.affected_houses]);
 
   useEffect(() => {
     if (!overlays.cut_fill) {
@@ -521,6 +548,15 @@ export default function MapExplorer() {
     if (!floodData || !floodDate) return null;
     return floodData.scenes[floodDate] ?? null;
   }, [floodData, floodDate]);
+
+  const filteredAffectedHouses = useMemo(() => {
+    if (!affectedHouses) return null;
+    if (!affectedHouseClasses.size) return affectedHouses;
+    const features = affectedHouses.features.filter((f) =>
+      affectedHouseClasses.has(String(f.properties.use_class ?? "other")),
+    );
+    return { ...affectedHouses, features, count: features.length };
+  }, [affectedHouses, affectedHouseClasses]);
 
   const floodGauge = useMemo(
     () => (floodData ? floodGaugeReference(floodData) : null),
@@ -1620,6 +1656,7 @@ export default function MapExplorer() {
                       )}
                     {group === "Utilities" &&
                       (overlays.transmission_lines ||
+                        overlays.transmission_11kv ||
                         overlays.substations ||
                         overlays.transmission_towers) && (
                         <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
@@ -1630,6 +1667,18 @@ export default function MapExplorer() {
                               <span className="flex-1 text-slate-300">Lines</span>
                               <span className="tabular-nums text-slate-500">
                                 {transmissionLines.count}
+                              </span>
+                            </div>
+                          )}
+                          {overlays.transmission_11kv && transmission11kv && (
+                            <div className="flex items-center gap-2">
+                              <span className="h-0.5 w-4 shrink-0 rounded-full bg-orange-400" />
+                              <span className="flex-1 text-slate-300">11 kV</span>
+                              <span className="tabular-nums text-slate-500">
+                                {transmission11kv.line_count ?? transmission11kv.count}
+                                {transmission11kv.pole_count != null
+                                  ? ` · ${transmission11kv.pole_count} poles`
+                                  : ""}
                               </span>
                             </div>
                           )}
@@ -1734,13 +1783,76 @@ export default function MapExplorer() {
                         </div>
                       </div>
                     )}
-                    {group === "Social Impact" && affectedHouses && affectedHouses.count > 0 && (
+                    {group === "Social Impact" &&
+                      overlays.affected_houses &&
+                      affectedHouses &&
+                      affectedHouses.count > 0 && (
                       <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-slate-400">
                         <div className="font-semibold text-white">Structures within Acquisition Boundary</div>
                         <div className="mt-1">
-                          {affectedHouses.count.toLocaleString()} building footprints inside the land
-                          acquisition boundary
+                          {affectedHouses.count.toLocaleString()} footprints
+                          {filteredAffectedHouses &&
+                          filteredAffectedHouses.count !== affectedHouses.count
+                            ? ` · showing ${filteredAffectedHouses.count}`
+                            : ""}{" "}
+                          · segregated by use
                         </div>
+                        {affectedHouses.classes && affectedHouses.classes.length > 0 && (
+                          <div className="mt-2 space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                                Use class
+                              </span>
+                              <button
+                                type="button"
+                                className="text-[10px] text-teal-300 hover:text-teal-200"
+                                onClick={() => setAffectedHouseClasses(new Set())}
+                              >
+                                Show all
+                              </button>
+                            </div>
+                            {affectedHouses.classes.map((c) => {
+                              const active =
+                                affectedHouseClasses.size === 0 ||
+                                affectedHouseClasses.has(c.id);
+                              return (
+                                <label
+                                  key={c.id}
+                                  className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 hover:bg-white/5"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    className="h-3 w-3 rounded border-white/20 bg-ink-900"
+                                    checked={active}
+                                    onChange={() => {
+                                      setAffectedHouseClasses((prev) => {
+                                        const allIds = (affectedHouses.classes ?? []).map(
+                                          (x) => x.id,
+                                        );
+                                        // Start from "all on" when empty
+                                        const next = new Set(
+                                          prev.size === 0 ? allIds : prev,
+                                        );
+                                        if (next.has(c.id)) next.delete(c.id);
+                                        else next.add(c.id);
+                                        if (next.size === 0 || next.size === allIds.length) {
+                                          return new Set();
+                                        }
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                  <span
+                                    className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                                    style={{ backgroundColor: c.color }}
+                                  />
+                                  <span className="flex-1 text-slate-300">{c.label}</span>
+                                  <span className="tabular-nums text-slate-500">{c.count}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
                     {group === "Analysis" && overlays.flood && floodData && (
@@ -1930,6 +2042,7 @@ export default function MapExplorer() {
             railwayStations={railwayStations}
             railwayPlatforms={railwayPlatforms}
             transmissionLines={transmissionLines}
+            transmission11kv={transmission11kv}
             substations={substations}
             transmissionTowers={transmissionTowers}
             waterBodies={waterBodies}
@@ -2499,6 +2612,64 @@ export default function MapExplorer() {
             />
           )}
 
+          {/* 11 kV transmission line + poles */}
+          {overlays.transmission_11kv && transmission11kv && (
+            <GeoJSON
+              key={`transmission-11kv-${transmission11kv.count}-${blinkKey("transmission_11kv")}`}
+              data={{
+                type: "FeatureCollection",
+                features: transmission11kv.features.filter(
+                  (f) => f.geometry.type === "LineString",
+                ),
+              }}
+              {...blinkGeoJson("transmission_11kv")}
+              style={() => withBlink("transmission_11kv", { ...TRANSMISSION_11KV_STYLE })}
+              onEachFeature={(feature, layer) => {
+                const props = feature.properties as {
+                  id?: string;
+                  name?: string;
+                  voltage?: string | null;
+                };
+                layer.bindTooltip(
+                  [
+                    `<span class="font-semibold">${props.name ?? "11 kV line"}</span>`,
+                    `<span class="text-slate-400">${props.voltage ?? "11"} kV</span>`,
+                    props.id ? `<span class="text-[10px] text-slate-500">${props.id}</span>` : null,
+                  ]
+                    .filter(Boolean)
+                    .join("<br/>"),
+                  { direction: "top", opacity: 0.95, className: "geovision-tooltip" },
+                );
+              }}
+            />
+          )}
+          {overlays.transmission_11kv &&
+            transmission11kv?.features
+              .filter((f) => f.geometry.type === "Point")
+              .map((f, i) => {
+                const [lon, lat] = f.geometry.coordinates as [number, number];
+                const name = f.properties.name;
+                return (
+                  <CircleMarker
+                    key={"p11-" + i}
+                    center={[lat, lon]}
+                    radius={3.5}
+                    pathOptions={{
+                      color: "#ea580c",
+                      fillColor: "#fb923c",
+                      fillOpacity: 0.95,
+                      weight: 1.5,
+                    }}
+                  >
+                    <Tooltip direction="top" offset={[0, -4]} opacity={0.95} className="geovision-tooltip">
+                      <span className="font-semibold">{name}</span>
+                      <br />
+                      <span className="text-slate-400">11 kV pole</span>
+                    </Tooltip>
+                  </CircleMarker>
+                );
+              })}
+
           {/* Substations */}
           {overlays.substations && substations && (
             <GeoJSON
@@ -2998,30 +3169,49 @@ export default function MapExplorer() {
           )}
 
           {/* Structures within acquisition boundary (building footprints) */}
-          {overlays.affected_houses && affectedHouses && (
+          {overlays.affected_houses && filteredAffectedHouses && (
             <GeoJSON
-              key={`affected-houses-${affectedHouses.source_file ?? "legacy"}-${affectedHouses.count}-${blinkKey("affected_houses")}`}
-              data={affectedHouses}
+              key={`affected-houses-${filteredAffectedHouses.source_file ?? "legacy"}-${filteredAffectedHouses.count}-${[...affectedHouseClasses].sort().join(",") || "all"}-${blinkKey("affected_houses")}`}
+              data={filteredAffectedHouses}
               {...blinkGeoJson("affected_houses")}
-              style={() =>
-                withBlink("affected_houses", {
-                  color: "#ef4444",
+              style={(feature) => {
+                const props = feature?.properties as {
+                  use_class?: string;
+                  color?: string;
+                } | undefined;
+                const color =
+                  props?.color ||
+                  buildingUseColor(props?.use_class) ||
+                  "#ef4444";
+                return withBlink("affected_houses", {
+                  color,
                   weight: 1,
-                  fillColor: "#ef4444",
-                  fillOpacity: 0.35,
-                })
-              }
+                  fillColor: color,
+                  fillOpacity: 0.4,
+                });
+              }}
               onEachFeature={(feature, layer) => {
                 const props = feature.properties as {
                   id?: string;
                   name?: string;
                   index?: number;
+                  use_label?: string;
+                  use_class?: string;
+                  code?: string | null;
                 };
-                const label = props.name ?? `Building ${props.index ?? ""}`;
-                layer.bindTooltip(
-                  `<span class="font-semibold">${label}</span><br/><span class="text-slate-400">${props.id ?? ""}</span>`,
-                  { direction: "top", opacity: 0.95, className: "geovision-tooltip" },
-                );
+                const label = props.use_label ?? props.name ?? `Building ${props.index ?? ""}`;
+                const bits = [
+                  `<span class="font-semibold">${label}</span>`,
+                  props.code && props.code !== props.use_label
+                    ? `<span class="text-slate-400">Code: ${props.code}</span>`
+                    : null,
+                  props.id ? `<span class="text-[10px] text-slate-500">${props.id}</span>` : null,
+                ].filter(Boolean);
+                layer.bindTooltip(bits.join("<br/>"), {
+                  direction: "top",
+                  opacity: 0.95,
+                  className: "geovision-tooltip",
+                });
               }}
             />
           )}
@@ -3750,6 +3940,7 @@ const OVERLAY_ICONS: Record<string, LucideIcon> = {
   railway_stations: TrainFront,
   railway_platforms: LandPlot,
   transmission_lines: Zap,
+  transmission_11kv: Zap,
   substations: Factory,
   transmission_towers: TowerControl,
   structures: Building2,

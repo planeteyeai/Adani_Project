@@ -6,11 +6,20 @@ import os
 import re
 import xml.etree.ElementTree as ET
 
-SRC = r"C:\Users\Kunal.Desale\Downloads\2b739cea2b094fdf83a769099632b4cc (1).kml"
+SRC = r"C:\Users\Kunal.Desale\Downloads\d0abe27a40b947bf94fbc8853a8c272b.kml"
 OUT = os.path.join(os.path.dirname(__file__), "..", "frontend", "public", "lulc.json")
 
 _NS_RE = re.compile(r"\{.*?\}")
 _WS_RE = re.compile(r"\s+")
+
+# Authoritative class areas (square metres) for the corridor LULC inventory.
+CLASS_AREA_M2 = {
+    "Water": 632_940,
+    "Built-up": 1_391_400,
+    "Bareland": 428_560,
+    "Agriculture": 505_530,
+    "Forest": 776_120,
+}
 
 # Fallback palette if a style colour is missing (KML AABBGGRR → hex).
 CLASS_COLORS = {
@@ -159,15 +168,40 @@ def parse_kml(path: str) -> dict:
             walk(child)
 
     walk(root)
+
+    class_colors: dict[str, str] = {}
+    for f in features:
+        klass = f["properties"]["class"]
+        if klass not in class_colors:
+            class_colors[klass] = f["properties"]["color"]
+
+    class_order = ("Water", "Built-up", "Bareland", "Agriculture", "Forest")
+    classes = []
+    for name in class_order:
+        count = class_counts.get(name, 0)
+        if not count:
+            continue
+        area_m2 = CLASS_AREA_M2.get(name)
+        entry: dict = {
+            "name": name,
+            "color": class_colors.get(name, CLASS_COLORS.get(name, "#94a3b8")),
+            "count": count,
+        }
+        if area_m2 is not None:
+            entry["area_m2"] = area_m2
+            entry["area_ha"] = round(area_m2 / 10_000, 3)
+        classes.append(entry)
+
+    total_m2 = sum(CLASS_AREA_M2[c["name"]] for c in classes if c["name"] in CLASS_AREA_M2)
+
     return {
         "title": "LULC",
         "description": "Land Use / Land Cover polygons along the project corridor",
+        "source_file": os.path.basename(path),
         "count": len(features),
-        "classes": [
-            {"name": name, "color": CLASS_COLORS.get(name, "#94a3b8"), "count": class_counts.get(name, 0)}
-            for name in ("Agriculture", "Forest", "Built-up", "Bareland", "Water")
-            if class_counts.get(name)
-        ],
+        "total_area_m2": total_m2,
+        "total_area_ha": round(total_m2 / 10_000, 3),
+        "classes": classes,
         "type": "FeatureCollection",
         "features": features,
     }
