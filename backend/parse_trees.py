@@ -44,6 +44,7 @@ def main() -> None:
     i_hmax = col("max_height_m")
     i_havg = col("avg_height_m")
     i_score = col("confidence_score", "best_detection_score")
+    i_cell = col("cell")
 
     trees: list[dict] = []
     for row in rows:
@@ -91,6 +92,10 @@ def main() -> None:
             entry["max_height_m"] = round(max_h, 2)
         if score is not None:
             entry["score"] = round(score, 3)
+        if i_cell is not None and row[i_cell] is not None:
+            cell = str(row[i_cell]).strip()
+            if cell:
+                entry["cell"] = cell
         trees.append(entry)
 
     wb.close()

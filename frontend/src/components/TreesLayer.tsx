@@ -23,6 +23,7 @@ function treeTooltipHtml(t: TreePoint): string {
     `<span class="font-semibold">🌳 ${t.id}</span>`,
     chKm ? `<span class="text-slate-400">Ch ${chKm}</span>` : null,
     t.zone ? `<span class="text-slate-400">${t.zone}</span>` : null,
+    t.cell ? `<span class="text-slate-400">${t.cell}</span>` : null,
     height || area
       ? `<span class="text-slate-400">${[height, area].filter(Boolean).join(" · ")}</span>`
       : null,

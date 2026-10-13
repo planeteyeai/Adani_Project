@@ -10,6 +10,7 @@ export type TreePoint = {
   min_height_m?: number | null;
   max_height_m?: number | null;
   score?: number | null;
+  cell?: string | null;
 };
 
 export type TreesData = {
